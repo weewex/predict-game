@@ -83,7 +83,7 @@ export default function SimpleModeScreen() {
         timestamp: new Date().toISOString(),
         score,
       };
-      await postScore(payload);
+      // await postScore(payload);
       Alert.alert("Result", `Score: ${score}\nDistance: ${Math.round(distancePx)}px\nTime: ${reactionMs}ms`);
     } catch (e: any) {
       Alert.alert("Local result", `Score: ${score}\n(Submit failed: ${e.message})`);
