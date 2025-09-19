@@ -302,11 +302,14 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   const [countdown, setCountdown] = useState(COUNTDOWN_STEPS);
   const [result, setResult] = useState<ResultState | null>(null);
   const [fieldSize, setFieldSize] = useState<{ width: number; height: number } | null>(null);
+  const [fieldOffset, setFieldOffset] = useState<{ x: number; y: number } | null>(null);
   const fieldWidth = fieldSize?.width ?? SCREEN_W;
   const fieldHeight = fieldSize?.height ?? SCREEN_H;
   const isFieldReady = fieldSize !== null;
   const { x, y, start, stop } = useTargetMotion(mode, fieldWidth, fieldHeight);
   const startRef = useRef(0);
+  const fieldRef = useRef<View>(null);
+  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
   const resultAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const shake = useRef(new Animated.Value(0)).current;
 
@@ -332,7 +335,46 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       }
       return { width, height };
     });
+    fieldRef.current?.measureInWindow((pageX, pageY) => {
+      setFieldOffset((prev) => {
+        if (prev && prev.x === pageX && prev.y === pageY) {
+          return prev;
+        }
+        return { x: pageX, y: pageY };
+      });
+    });
   }, []);
+
+  const handlePressIn = useCallback(
+    (evt: GestureResponderEvent) => {
+      if (phase !== "guess" || !isFieldReady) return;
+
+      const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
+      let touchX: number | null = Number.isFinite(locationX) ? locationX : null;
+      let touchY: number | null = Number.isFinite(locationY) ? locationY : null;
+
+      if ((touchX === null || touchY === null) && fieldOffset) {
+        const normalizedX = pageX - fieldOffset.x;
+        const normalizedY = pageY - fieldOffset.y;
+        if (Number.isFinite(normalizedX)) {
+          touchX = normalizedX;
+        }
+        if (Number.isFinite(normalizedY)) {
+          touchY = normalizedY;
+        }
+      }
+
+      if (touchX !== null && touchY !== null) {
+        lastTouchRef.current = {
+          x: clamp(touchX, 0, fieldWidth),
+          y: clamp(touchY, 0, fieldHeight),
+        };
+      } else {
+        lastTouchRef.current = null;
+      }
+    },
+    [phase, isFieldReady, fieldOffset, fieldWidth, fieldHeight]
+  );
 
   const shakeStyle = useMemo(
     () => ({
@@ -458,10 +500,41 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   const handleGuess = useCallback(
     (evt: GestureResponderEvent) => {
       if (phase !== "guess" || !isFieldReady) return;
+
+      const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
+      let guessX = Number.isFinite(locationX) ? locationX : 0;
+      let guessY = Number.isFinite(locationY) ? locationY : 0;
+
+      if (fieldOffset) {
+        const normalizedX = pageX - fieldOffset.x;
+        const normalizedY = pageY - fieldOffset.y;
+        if (Number.isFinite(normalizedX)) {
+          guessX = normalizedX;
+        }
+        if (Number.isFinite(normalizedY)) {
+          guessY = normalizedY;
+        }
+      }
+
+      const fallbackTouch = lastTouchRef.current;
+      const shouldUseFallback =
+        !!fallbackTouch &&
+        (!Number.isFinite(guessX) ||
+          !Number.isFinite(guessY) ||
+          (guessX === 0 &&
+            guessY === 0 &&
+            (fallbackTouch.x !== 0 || fallbackTouch.y !== 0)));
+
+      if (shouldUseFallback) {
+        guessX = fallbackTouch.x;
+        guessY = fallbackTouch.y;
+      }
+
       const guess = {
-        x: evt.nativeEvent.locationX,
-        y: evt.nativeEvent.locationY,
+        x: clamp(guessX, 0, fieldWidth),
+        y: clamp(guessY, 0, fieldHeight),
       };
+      lastTouchRef.current = null;
       const target = stop();
       const reactionMs = Date.now() - startRef.current;
       const distancePx = Math.hypot(guess.x - target.x, guess.y - target.y);
@@ -477,7 +550,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       });
       setPhase("result");
     },
-    [phase, stop, isFieldReady, fieldWidth, fieldHeight]
+    [phase, stop, isFieldReady, fieldWidth, fieldHeight, fieldOffset]
   );
 
   const resetGame = useCallback(() => {
@@ -519,8 +592,10 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       </View>
       <Animated.View style={[styles.fieldWrapper, shakeStyle]}>
         <Pressable
+          ref={fieldRef}
           style={styles.field}
           onLayout={handleFieldLayout}
+          onPressIn={handlePressIn}
           disabled={phase !== "guess" || !isFieldReady}
           onPress={handleGuess}
         >
