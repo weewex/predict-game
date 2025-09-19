@@ -502,17 +502,23 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       if (phase !== "guess" || !isFieldReady) return;
 
       const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
-      let guessX = Number.isFinite(locationX) ? locationX : 0;
-      let guessY = Number.isFinite(locationY) ? locationY : 0;
+      const hasLocationX = Number.isFinite(locationX);
+      const hasLocationY = Number.isFinite(locationY);
+      let guessX = hasLocationX ? locationX : 0;
+      let guessY = hasLocationY ? locationY : 0;
 
       if (fieldOffset) {
-        const normalizedX = pageX - fieldOffset.x;
-        const normalizedY = pageY - fieldOffset.y;
-        if (Number.isFinite(normalizedX)) {
-          guessX = normalizedX;
+        if (!hasLocationX) {
+          const normalizedX = pageX - fieldOffset.x;
+          if (Number.isFinite(normalizedX)) {
+            guessX = normalizedX;
+          }
         }
-        if (Number.isFinite(normalizedY)) {
-          guessY = normalizedY;
+        if (!hasLocationY) {
+          const normalizedY = pageY - fieldOffset.y;
+          if (Number.isFinite(normalizedY)) {
+            guessY = normalizedY;
+          }
         }
       }
 
