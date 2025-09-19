@@ -553,7 +553,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
 
       const guess = {
         x: clamp(guessX, 0, fieldWidth),
-        y: clamp(guessY, 0, fieldHeight),
+        y: clamp(guessY - 25, 0, fieldHeight),
       };
       lastTouchRef.current = null;
       const target = stop();
