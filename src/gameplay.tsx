@@ -79,6 +79,46 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, lower), upper);
 }
 
+function resolveTouchPoint(
+  evt: GestureResponderEvent,
+  fieldOffset: { x: number; y: number } | null,
+  fieldWidth: number,
+  fieldHeight: number
+): { x: number | null; y: number | null } {
+  const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
+  const hasLocalX = Number.isFinite(locationX);
+  const hasLocalY = Number.isFinite(locationY);
+  const localX = hasLocalX ? clamp(locationX, 0, fieldWidth) : null;
+  const localY = hasLocalY ? clamp(locationY, 0, fieldHeight) : null;
+
+  const normalizedX =
+    fieldOffset && Number.isFinite(pageX)
+      ? clamp(pageX - fieldOffset.x, 0, fieldWidth)
+      : null;
+  const normalizedY =
+    fieldOffset && Number.isFinite(pageY)
+      ? clamp(pageY - fieldOffset.y, 0, fieldHeight)
+      : null;
+
+  const pickCoordinate = (primary: number | null, secondary: number | null) => {
+    if (primary === null && secondary === null) {
+      return null;
+    }
+    if (primary === null) {
+      return secondary;
+    }
+    if (secondary === null) {
+      return primary;
+    }
+    return Math.abs(primary - secondary) > 1 ? secondary : primary;
+  };
+
+  return {
+    x: pickCoordinate(localX, normalizedX),
+    y: pickCoordinate(localY, normalizedY),
+  };
+}
+
 interface MotionController {
   x: Animated.Value;
   y: Animated.Value;
@@ -349,26 +389,10 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
     (evt: GestureResponderEvent) => {
       if (phase !== "guess" || !isFieldReady) return;
 
-      const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
-      let touchX: number | null = Number.isFinite(locationX) ? locationX : null;
-      let touchY: number | null = Number.isFinite(locationY) ? locationY : null;
+      const point = resolveTouchPoint(evt, fieldOffset, fieldWidth, fieldHeight);
 
-      if ((touchX === null || touchY === null) && fieldOffset) {
-        const normalizedX = pageX - fieldOffset.x;
-        const normalizedY = pageY - fieldOffset.y;
-        if (Number.isFinite(normalizedX)) {
-          touchX = normalizedX;
-        }
-        if (Number.isFinite(normalizedY)) {
-          touchY = normalizedY;
-        }
-      }
-
-      if (touchX !== null && touchY !== null) {
-        lastTouchRef.current = {
-          x: clamp(touchX, 0, fieldWidth),
-          y: clamp(touchY, 0, fieldHeight),
-        };
+      if (point.x !== null && point.y !== null) {
+        lastTouchRef.current = { x: point.x, y: point.y };
       } else {
         lastTouchRef.current = null;
       }
@@ -501,26 +525,10 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
     (evt: GestureResponderEvent) => {
       if (phase !== "guess" || !isFieldReady) return;
 
-      const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
-      const hasLocationX = Number.isFinite(locationX);
-      const hasLocationY = Number.isFinite(locationY);
-      let guessX = hasLocationX ? locationX : 0;
-      let guessY = hasLocationY ? locationY : 0;
+      const touchPoint = resolveTouchPoint(evt, fieldOffset, fieldWidth, fieldHeight);
 
-      if (fieldOffset) {
-        if (!hasLocationX) {
-          const normalizedX = pageX - fieldOffset.x;
-          if (Number.isFinite(normalizedX)) {
-            guessX = normalizedX;
-          }
-        }
-        if (!hasLocationY) {
-          const normalizedY = pageY - fieldOffset.y;
-          if (Number.isFinite(normalizedY)) {
-            guessY = normalizedY;
-          }
-        }
-      }
+      let guessX = touchPoint.x ?? Number.NaN;
+      let guessY = touchPoint.y ?? Number.NaN;
 
       const fallbackTouch = lastTouchRef.current;
       const shouldUseFallback =
@@ -534,6 +542,13 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       if (shouldUseFallback) {
         guessX = fallbackTouch.x;
         guessY = fallbackTouch.y;
+      }
+
+      if (!Number.isFinite(guessX)) {
+        guessX = 0;
+      }
+      if (!Number.isFinite(guessY)) {
+        guessY = 0;
       }
 
       const guess = {
