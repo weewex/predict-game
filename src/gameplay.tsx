@@ -1,0 +1,720 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  Dimensions,
+  Easing,
+  GestureResponderEvent,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { calculateScore } from "./score";
+import { getNickname, saveScoreEntry } from "./storage";
+import type { GameMode, ScorePayload } from "./types";
+import { palette } from "./theme";
+import { MenuButton } from "./ui";
+
+const TARGET_SIZE = 72;
+const TARGET_RADIUS = TARGET_SIZE / 2;
+const EDGE_PADDING = TARGET_RADIUS + 28;
+const MARKER_SIZE = 14;
+const OBSERVE_DURATION = 2000;
+const COUNTDOWN_STEPS = 3;
+const COUNTDOWN_INTERVAL = 800;
+const HORIZONTAL_SPEED = 190; // pixels per second
+const DIAGONAL_SPEED = 240;
+
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
+
+type Phase = "observe" | "countdown" | "guess" | "result";
+
+interface ResultState {
+  reactionMs: number;
+  distancePx: number;
+  score: number;
+  target: { x: number; y: number };
+  guess: { x: number; y: number };
+  saveState: { status: "pending" | "saved" | "error"; message?: string };
+}
+
+const modeDetails: Record<GameMode, { label: string; description: string }> = {
+  SIMPLE: {
+    label: "Simple",
+    description: "Static archery target. Memorize its coordinates before the blackout.",
+  },
+  NORMAL: {
+    label: "Normal",
+    description: "The target glides horizontally. Predict its slide when the lights go out.",
+  },
+  PRO: {
+    label: "Pro",
+    description: "Free-flight motion in two dimensions. Track both axes to land the shot.",
+  },
+};
+
+const phaseCopy: Record<Exclude<Phase, "result">, { title: string; subtitle: string }> = {
+  observe: {
+    title: "Track the target",
+    subtitle: "Study its motion before the screen fades",
+  },
+  countdown: {
+    title: "Blackout",
+    subtitle: "The target keeps moving. Count it out in your head",
+  },
+  guess: {
+    title: "Take the shot",
+    subtitle: "Tap where you believe the target is right now",
+  },
+};
+
+function randomBetween(min: number, max: number) {
+  return Math.random() * (max - min) + min;
+}
+
+interface MotionController {
+  x: Animated.Value;
+  y: Animated.Value;
+  start: () => void;
+  stop: () => { x: number; y: number };
+}
+
+function useTargetMotion(mode: GameMode, width: number, height: number): MotionController {
+  const x = useRef(new Animated.Value(width / 2)).current;
+  const y = useRef(new Animated.Value(height / 2)).current;
+  const running = useRef(false);
+  const animationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const positionRef = useRef({ x: width / 2, y: height / 2 });
+
+  useEffect(() => {
+    const xListener = x.addListener(({ value }) => {
+      positionRef.current.x = value;
+    });
+    const yListener = y.addListener(({ value }) => {
+      positionRef.current.y = value;
+    });
+    return () => {
+      x.removeListener(xListener);
+      y.removeListener(yListener);
+    };
+  }, [x, y]);
+
+  const minX = EDGE_PADDING;
+  const maxX = width - EDGE_PADDING;
+  const minY = EDGE_PADDING;
+  const maxY = height - EDGE_PADDING;
+
+  const stop = useCallback(() => {
+    running.current = false;
+    animationRef.current?.stop();
+    animationRef.current = null;
+    x.stopAnimation((value) => {
+      positionRef.current.x = value;
+    });
+    y.stopAnimation((value) => {
+      positionRef.current.y = value;
+    });
+    return { ...positionRef.current };
+  }, [x, y]);
+
+  const start = useCallback(() => {
+    stop();
+    const startX = randomBetween(minX, maxX);
+    const startY = mode === "NORMAL" ? height / 2 : randomBetween(minY, maxY);
+    x.setValue(startX);
+    y.setValue(startY);
+    positionRef.current = { x: startX, y: startY };
+
+    if (mode === "SIMPLE") {
+      return;
+    }
+
+    running.current = true;
+
+    if (mode === "NORMAL") {
+      const midpoint = (minX + maxX) / 2;
+      const travel = (nextX: number) => {
+        if (!running.current) return;
+        const distance = Math.abs(nextX - positionRef.current.x);
+        const duration = Math.max(220, (distance / HORIZONTAL_SPEED) * 1000);
+        const anim = Animated.timing(x, {
+          toValue: nextX,
+          duration,
+          easing: Easing.linear,
+          useNativeDriver: false,
+        });
+        animationRef.current = anim;
+        anim.start(({ finished }) => {
+          if (finished && running.current) {
+            travel(nextX === maxX ? minX : maxX);
+          }
+        });
+      };
+      const firstTarget = startX > midpoint ? minX : maxX;
+      travel(firstTarget);
+      return;
+    }
+
+    const travelPlane = () => {
+      if (!running.current) return;
+      const destX = randomBetween(minX, maxX);
+      const destY = randomBetween(minY, maxY);
+      const dx = destX - positionRef.current.x;
+      const dy = destY - positionRef.current.y;
+      const distance = Math.hypot(dx, dy);
+      const duration = Math.max(320, (distance / DIAGONAL_SPEED) * 1000);
+      const anim = Animated.parallel([
+        Animated.timing(x, {
+          toValue: destX,
+          duration,
+          easing: Easing.linear,
+          useNativeDriver: false,
+        }),
+        Animated.timing(y, {
+          toValue: destY,
+          duration,
+          easing: Easing.linear,
+          useNativeDriver: false,
+        }),
+      ]);
+      animationRef.current = anim;
+      anim.start(({ finished }) => {
+        if (finished && running.current) {
+          travelPlane();
+        }
+      });
+    };
+
+    travelPlane();
+  }, [stop, minX, maxX, minY, maxY, height, mode, x, y]);
+
+  useEffect(() => stop, [stop]);
+
+  return { x, y, start, stop };
+}
+
+function ArcheryTarget() {
+  const rings = useMemo(
+    () => [
+      { scale: 1, color: "#F4F5F7" },
+      { scale: 0.78, color: "#1F2521" },
+      { scale: 0.58, color: "#1E6FAE" },
+      { scale: 0.38, color: "#B91C1C" },
+      { scale: 0.2, color: "#FACC15" },
+    ],
+    []
+  );
+
+  return (
+    <View style={styles.targetFace} pointerEvents="none">
+      {rings.map((ring, index) => (
+        <View
+          key={ring.scale}
+          style={{
+            width: TARGET_SIZE * ring.scale,
+            height: TARGET_SIZE * ring.scale,
+            borderRadius: (TARGET_SIZE * ring.scale) / 2,
+            backgroundColor: ring.color,
+            position: "absolute",
+            borderWidth: index === 0 ? 0 : 2,
+            borderColor: "rgba(12,12,12,0.18)",
+            shadowColor: "#000",
+            shadowOpacity: 0.15,
+            shadowOffset: { width: 0, height: 2 },
+            shadowRadius: 2,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
+export interface GameScreenProps {
+  mode: GameMode;
+  onExit?: () => void;
+}
+
+export function GameScreen({ mode, onExit }: GameScreenProps) {
+  const [phase, setPhase] = useState<Phase>("observe");
+  const [countdown, setCountdown] = useState(COUNTDOWN_STEPS);
+  const [result, setResult] = useState<ResultState | null>(null);
+  const { x, y, start, stop } = useTargetMotion(mode, SCREEN_W, SCREEN_H);
+  const startRef = useRef(0);
+  const resultAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const shake = useRef(new Animated.Value(0)).current;
+
+  const targetStyle = useMemo(
+    () => ({
+      transform: [
+        { translateX: Animated.subtract(x, TARGET_RADIUS) },
+        { translateY: Animated.subtract(y, TARGET_RADIUS) },
+      ],
+    }),
+    [x, y]
+  );
+
+  const shakeStyle = useMemo(
+    () => ({
+      transform: [
+        {
+          translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-10, 10] }),
+        },
+        {
+          translateY: shake.interpolate({ inputRange: [-1, 1], outputRange: [-6, 6] }),
+        },
+      ],
+    }),
+    [shake]
+  );
+
+  useEffect(() => {
+    if (phase !== "observe") return;
+    start();
+    const timer = setTimeout(() => {
+      setPhase("countdown");
+    }, OBSERVE_DURATION);
+    return () => clearTimeout(timer);
+  }, [phase, start]);
+
+  useEffect(() => {
+    if (phase !== "countdown") return;
+    setCountdown(COUNTDOWN_STEPS);
+    let current = COUNTDOWN_STEPS;
+    const interval = setInterval(() => {
+      current -= 1;
+      if (current <= 0) {
+        clearInterval(interval);
+        startRef.current = Date.now();
+        setPhase("guess");
+      } else {
+        setCountdown(current);
+      }
+    }, COUNTDOWN_INTERVAL);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "result" || !result) return;
+    resultAnims.forEach((anim) => anim.setValue(0));
+    shake.setValue(0);
+
+    const shakeSequence = () =>
+      Animated.sequence([
+        Animated.timing(shake, { toValue: 1, duration: 70, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: -1, duration: 70, useNativeDriver: true }),
+        Animated.timing(shake, { toValue: 0, duration: 70, useNativeDriver: true }),
+      ]);
+
+    Animated.sequence(
+      resultAnims.map((anim) =>
+        Animated.sequence([
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.delay(40),
+          shakeSequence(),
+        ])
+      )
+    ).start();
+  }, [phase, result, resultAnims, shake]);
+
+  useEffect(() => {
+    if (phase !== "result" || !result || result.saveState.status !== "pending") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const nickname = (await getNickname()) ?? "anon";
+        const payload: ScorePayload = {
+          nickname,
+          mode,
+          distancePx: result.distancePx,
+          reactionMs: result.reactionMs,
+          screenWidth: SCREEN_W,
+          screenHeight: SCREEN_H,
+          targetX: result.target.x,
+          targetY: result.target.y,
+          guessX: result.guess.x,
+          guessY: result.guess.y,
+          timestamp: new Date().toISOString(),
+          score: result.score,
+        };
+        await saveScoreEntry(payload);
+        if (!cancelled) {
+          setResult((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  saveState: { status: "saved", message: "Saved to leaderboard" },
+                }
+              : prev
+          );
+        }
+      } catch (error: any) {
+        if (!cancelled) {
+          setResult((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  saveState: {
+                    status: "error",
+                    message: error?.message ?? "Unable to save score",
+                  },
+                }
+              : prev
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, result, mode]);
+
+  const handleGuess = useCallback(
+    (evt: GestureResponderEvent) => {
+      if (phase !== "guess") return;
+      const guess = {
+        x: evt.nativeEvent.locationX,
+        y: evt.nativeEvent.locationY,
+      };
+      const target = stop();
+      const reactionMs = Date.now() - startRef.current;
+      const distancePx = Math.hypot(guess.x - target.x, guess.y - target.y);
+      const maxDistance = Math.hypot(SCREEN_W, SCREEN_H);
+      const score = calculateScore(distancePx, reactionMs, maxDistance);
+      setResult({
+        reactionMs,
+        distancePx,
+        score,
+        target,
+        guess,
+        saveState: { status: "pending" },
+      });
+      setPhase("result");
+    },
+    [phase, stop]
+  );
+
+  const resetGame = useCallback(() => {
+    setResult(null);
+    setCountdown(COUNTDOWN_STEPS);
+    setPhase("observe");
+  }, []);
+
+  const detail = modeDetails[mode];
+
+  const resultItems = result
+    ? [
+        {
+          key: "time",
+          label: "Time",
+          value: `${result.reactionMs} ms`,
+          style: styles.resultSmall,
+        },
+        {
+          key: "distance",
+          label: "Distance",
+          value: `${Math.round(result.distancePx)} px`,
+          style: styles.resultSmall,
+        },
+        {
+          key: "score",
+          label: "Score",
+          value: `${result.score}`,
+          style: styles.resultLarge,
+        },
+      ]
+    : [];
+
+  return (
+    <View style={styles.safe}>
+      <View style={styles.header}>
+        <Text style={styles.modeTitle}>{detail.label} Mode</Text>
+        <Text style={styles.modeSubtitle}>{detail.description}</Text>
+      </View>
+      <Animated.View style={[styles.fieldWrapper, shakeStyle]}>
+        <Pressable style={styles.field} disabled={phase !== "guess"} onPress={handleGuess}>
+          <Animated.View style={[styles.target, targetStyle]}>
+            <ArcheryTarget />
+          </Animated.View>
+          {phase === "result" && result && (
+            <>
+              <View
+                style={[
+                  styles.marker,
+                  styles.markerTarget,
+                  {
+                    left: result.target.x - MARKER_SIZE / 2,
+                    top: result.target.y - MARKER_SIZE / 2,
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.marker,
+                  styles.markerGuess,
+                  {
+                    left: result.guess.x - MARKER_SIZE / 2,
+                    top: result.guess.y - MARKER_SIZE / 2,
+                  },
+                ]}
+              />
+            </>
+          )}
+          {(phase === "countdown" || phase === "guess") && (
+            <View
+              style={[styles.overlay, phase === "guess" ? styles.overlayGuess : styles.overlayCountdown]}
+              pointerEvents="none"
+            >
+              <Text style={styles.overlayTitle}>{phaseCopy[phase].title}</Text>
+              {phase === "countdown" ? (
+                <Text style={styles.countdown}>{countdown}</Text>
+              ) : (
+                <Text style={styles.guessText}>Tap now</Text>
+              )}
+              <Text style={styles.overlaySubtitle}>{phaseCopy[phase].subtitle}</Text>
+            </View>
+          )}
+          {phase === "result" && result && (
+            <View style={styles.resultOverlay}>
+              <View style={styles.resultsCard}>
+                <Text style={styles.resultsTitle}>How close were you?</Text>
+                <View style={styles.resultsList}>
+                  {resultItems.map((item, index) => (
+                    <Animated.View
+                      key={item.key}
+                      style={[
+                        styles.resultItem,
+                        item.style,
+                        {
+                          opacity: resultAnims[index],
+                          transform: [
+                            {
+                              scale: resultAnims[index].interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [0.6, 1],
+                              }),
+                            },
+                          ],
+                        },
+                      ]}
+                    >
+                      <Text style={styles.resultLabel}>{item.label}</Text>
+                      <Text style={styles.resultValue}>{item.value}</Text>
+                    </Animated.View>
+                  ))}
+                </View>
+                <View style={styles.legendRow}>
+                  <View style={[styles.legendDot, { backgroundColor: palette.positive }]} />
+                  <Text style={styles.legendText}>Actual target</Text>
+                  <View style={[styles.legendDot, { backgroundColor: palette.negative, marginLeft: 16 }]} />
+                  <Text style={styles.legendText}>Your guess</Text>
+                </View>
+                {result.saveState.status !== "pending" && (
+                  <Text
+                    style={[
+                      styles.saveMessage,
+                      result.saveState.status === "saved" ? styles.saveMessageOk : styles.saveMessageError,
+                    ]}
+                  >
+                    {result.saveState.message}
+                  </Text>
+                )}
+                <View style={styles.resultButtons}>
+                  <MenuButton title="Play again" onPress={resetGame} style={styles.inlineButton} />
+                  {onExit && (
+                    <MenuButton title="Back to modes" onPress={onExit} style={styles.inlineButton} />
+                  )}
+                </View>
+              </View>
+            </View>
+          )}
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: palette.background,
+    padding: 20,
+  },
+  header: {
+    paddingVertical: 8,
+  },
+  modeTitle: {
+    color: palette.textPrimary,
+    fontSize: 24,
+    fontWeight: "700",
+  },
+  modeSubtitle: {
+    color: palette.textSecondary,
+    fontSize: 14,
+    marginTop: 4,
+  },
+  fieldWrapper: {
+    flex: 1,
+    marginTop: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: palette.border,
+    overflow: "hidden",
+    backgroundColor: palette.surface,
+    shadowColor: "#020806",
+    shadowOpacity: 0.45,
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  field: {
+    flex: 1,
+  },
+  target: {
+    position: "absolute",
+    width: TARGET_SIZE,
+    height: TARGET_SIZE,
+    borderRadius: TARGET_RADIUS,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  targetFace: {
+    width: TARGET_SIZE,
+    height: TARGET_SIZE,
+    borderRadius: TARGET_RADIUS,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  marker: {
+    position: "absolute",
+    width: MARKER_SIZE,
+    height: MARKER_SIZE,
+    borderRadius: MARKER_SIZE / 2,
+  },
+  markerTarget: {
+    backgroundColor: palette.positive,
+    borderWidth: 2,
+    borderColor: "rgba(14,33,23,0.6)",
+  },
+  markerGuess: {
+    backgroundColor: palette.negative,
+    borderWidth: 2,
+    borderColor: "rgba(48,14,18,0.6)",
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  overlayCountdown: {
+    backgroundColor: palette.overlayHeavy,
+  },
+  overlayGuess: {
+    backgroundColor: palette.overlay,
+  },
+  overlayTitle: {
+    color: palette.textPrimary,
+    fontSize: 26,
+    fontWeight: "700",
+  },
+  overlaySubtitle: {
+    color: palette.textSecondary,
+    marginTop: 12,
+    textAlign: "center",
+  },
+  countdown: {
+    color: palette.textPrimary,
+    fontSize: 74,
+    fontWeight: "800",
+    marginVertical: 18,
+  },
+  guessText: {
+    color: palette.textPrimary,
+    fontSize: 40,
+    fontWeight: "800",
+    marginVertical: 18,
+  },
+  resultOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: palette.overlay,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  resultsCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: palette.surfaceAlt,
+    borderRadius: 18,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  resultsTitle: {
+    color: palette.textPrimary,
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  resultsList: {
+    marginTop: 12,
+  },
+  resultItem: {
+    marginBottom: 12,
+    alignItems: "center",
+  },
+  resultSmall: {
+    paddingVertical: 8,
+  },
+  resultLarge: {
+    paddingVertical: 10,
+  },
+  resultLabel: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  resultValue: {
+    color: palette.textPrimary,
+    fontWeight: "800",
+    fontSize: 18,
+    marginTop: 4,
+  },
+  legendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 12,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  legendText: {
+    color: palette.textSecondary,
+    marginLeft: 6,
+    fontSize: 12,
+  },
+  saveMessage: {
+    marginTop: 12,
+    textAlign: "center",
+    fontSize: 12,
+  },
+  saveMessageOk: {
+    color: palette.positive,
+  },
+  saveMessageError: {
+    color: palette.negative,
+  },
+  resultButtons: {
+    marginTop: 16,
+  },
+  inlineButton: {
+    width: "100%",
+  },
+});

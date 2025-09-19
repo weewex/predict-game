@@ -3,6 +3,13 @@ import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-nativ
 import { useFocusEffect } from "@react-navigation/native";
 import { getScores } from "../src/storage";
 import type { ScorePayload } from "../src/types";
+import { palette } from "../src/theme";
+
+const modeLabels: Record<ScorePayload["mode"], string> = {
+  SIMPLE: "Simple",
+  NORMAL: "Normal",
+  PRO: "Pro",
+};
 
 export default function LeaderboardScreen() {
   const [data, setData] = useState<ScorePayload[]>([]);
@@ -29,13 +36,19 @@ export default function LeaderboardScreen() {
     }, [loadScores])
   );
 
-  if (loading) return <ActivityIndicator style={{ marginTop: 40 }} />;
-  if (error) return <Text style={{ color: "#EF4444", padding: 16 }}>{error}</Text>;
+  if (loading)
+    return <ActivityIndicator style={{ marginTop: 40 }} color={palette.accent} size="large" />;
+  if (error)
+    return (
+      <View style={styles.safe}>
+        <Text style={styles.error}>{error}</Text>
+      </View>
+    );
 
   if (!data.length) {
     return (
       <View style={styles.safe}>
-        <Text style={{ color: "#A3A8C3", padding: 16 }}>No scores saved yet. Play a round!</Text>
+        <Text style={styles.empty}>No scores saved yet. Play a round!</Text>
       </View>
     );
   }
@@ -51,9 +64,10 @@ export default function LeaderboardScreen() {
             <Text style={styles.rank}>{index + 1}.</Text>
             <View style={styles.rowContent}>
               <Text style={styles.name}>{item.nickname}</Text>
-              <Text style={styles.meta}>
-                {`${Math.round(item.distancePx)}px · ${item.reactionMs}ms`}
-              </Text>
+              <View style={styles.metaRow}>
+                <Text style={styles.modeBadge}>{modeLabels[item.mode]}</Text>
+                <Text style={styles.meta}>{`${Math.round(item.distancePx)}px · ${item.reactionMs}ms`}</Text>
+              </View>
             </View>
             <Text style={styles.score}>{item.score}</Text>
           </View>
@@ -64,19 +78,41 @@ export default function LeaderboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0B10" },
+  safe: { flex: 1, backgroundColor: palette.background },
   row: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#141420",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: palette.border,
+    shadowColor: "#04110A",
+    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 14,
+    elevation: 5,
   },
   rowContent: { flex: 1, marginLeft: 12 },
-  rank: { color: "#A3A8C3", width: 28, textAlign: "right" },
-  name: { color: "#ECEFF4", fontWeight: "700" },
-  meta: { color: "#A3A8C3", fontSize: 12, marginTop: 2 },
-  score: { color: "#A5B4FC", fontWeight: "700" },
+  rank: { color: palette.textSecondary, width: 28, textAlign: "right" },
+  name: { color: palette.textPrimary, fontWeight: "700", fontSize: 16 },
+  metaRow: { flexDirection: "row", alignItems: "center", marginTop: 6 },
+  modeBadge: {
+    backgroundColor: palette.surfaceAlt,
+    color: palette.textPrimary,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.border,
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  meta: { color: palette.textSecondary, fontSize: 12, marginLeft: 10 },
+  score: { color: palette.accent, fontWeight: "800", fontSize: 18 },
+  empty: { color: palette.textSecondary, padding: 16 },
+  error: { color: palette.negative, padding: 16 },
 });
