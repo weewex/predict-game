@@ -1,7 +1,9 @@
 export const palette = {
   background: "#0D1510",
   surface: "#16201B",
+  surfaceOpacity: "#16201BCC",
   surfaceAlt: "#1E2A24",
+  surfaceAltOpacity: "#1E2A24CC",
   overlay: "rgba(10, 24, 17, 1)",
   overlayHeavy: "rgba(6, 18, 12, 1)",
   border: "#243830",

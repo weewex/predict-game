@@ -728,7 +728,7 @@ const styles = StyleSheet.create({
   },
   resultOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: palette.overlay,
+    backgroundColor: palette.surfaceOpacity,
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
@@ -736,7 +736,7 @@ const styles = StyleSheet.create({
   resultsCard: {
     width: "100%",
     maxWidth: 360,
-    backgroundColor: palette.surfaceAlt,
+    backgroundColor: palette.surfaceAltOpacity,
     borderRadius: 18,
     padding: 20,
     borderWidth: 1,
