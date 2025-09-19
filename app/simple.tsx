@@ -1,17 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Dimensions, Animated, Easing, Pressable, Alert } from "react-native";
-import { getNickname } from "../src/storage";
-import { postScore } from "../src/api";
+import { getNickname, saveScoreEntry } from "../src/storage";
+import { calculateScore } from "../src/score";
 import type { ScorePayload } from "../src/types";
 
 const { width: SCREEN_W } = Dimensions.get("window");
-
-function computeScore(distancePx: number, reactionMs: number): number {
-  const max = 1000;
-  const distPenalty = Math.min(distancePx, SCREEN_W) * 0.5;
-  const timePenalty = Math.max(0, reactionMs - 100) * 0.5;
-  return Math.max(0, Math.round(max - distPenalty - timePenalty));
-}
 
 export default function SimpleModeScreen() {
   const [phase, setPhase] = useState<"move" | "countdown" | "guess" | "done">("move");
@@ -38,7 +31,7 @@ export default function SimpleModeScreen() {
       }
     });
     return () => move.stop();
-  }, [phase]);
+  }, [anim, phase]);
 
   useEffect(() => {
     if (phase !== "countdown") return;
@@ -68,7 +61,7 @@ export default function SimpleModeScreen() {
     setGuessX(x);
     const reactionMs = Date.now() - startRef.current;
     const distancePx = Math.abs(x - targetX);
-    const score = computeScore(distancePx, reactionMs);
+    const score = calculateScore(distancePx, reactionMs, SCREEN_W);
     setPhase("done");
     try {
       const nickname = (await getNickname()) ?? "anon";
@@ -83,10 +76,16 @@ export default function SimpleModeScreen() {
         timestamp: new Date().toISOString(),
         score,
       };
-      // await postScore(payload);
-      Alert.alert("Result", `Score: ${score}\nDistance: ${Math.round(distancePx)}px\nTime: ${reactionMs}ms`);
+      await saveScoreEntry(payload);
+      Alert.alert(
+        "Score saved",
+        `Score: ${score}\nDistance: ${Math.round(distancePx)}px\nTime: ${reactionMs}ms`
+      );
     } catch (e: any) {
-      Alert.alert("Local result", `Score: ${score}\n(Submit failed: ${e.message})`);
+      Alert.alert(
+        "Score not saved",
+        `Score: ${score}\nDistance: ${Math.round(distancePx)}px\nTime: ${reactionMs}ms\n(Save failed: ${e.message})`
+      );
     }
   }
 
