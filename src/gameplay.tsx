@@ -92,6 +92,7 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
   const running = useRef(false);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
   const positionRef = useRef({ x: width / 2, y: height / 2 });
+  const velocityRef = useRef({ vx: 0, vy: 0 });
 
   useEffect(() => {
     const xListener = x.addListener(({ value }) => {
@@ -138,6 +139,7 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
     y.stopAnimation((value) => {
       positionRef.current.y = value;
     });
+    velocityRef.current = { vx: 0, vy: 0 };
 
     const safeX = clamp(
       Number.isFinite(positionRef.current.x) ? positionRef.current.x : bounds.centerX,
@@ -218,37 +220,173 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
       return;
     }
 
-    const travelPlane = () => {
-      if (!running.current) return;
-      const destX = bounds.canMoveX ? randomBetween(bounds.minX, bounds.maxX) : bounds.minX;
-      const destY = bounds.canMoveY ? randomBetween(bounds.minY, bounds.maxY) : bounds.minY;
-      const dx = destX - positionRef.current.x;
-      const dy = destY - positionRef.current.y;
-      const distance = Math.hypot(dx, dy);
-      const duration = Math.max(320, (distance / DIAGONAL_SPEED) * 1000);
-      const anim = Animated.parallel([
-        Animated.timing(x, {
-          toValue: destX,
-          duration,
-          easing: Easing.linear,
-          useNativeDriver: false,
-        }),
-        Animated.timing(y, {
-          toValue: destY,
-          duration,
-          easing: Easing.linear,
-          useNativeDriver: false,
-        }),
-      ]);
-      animationRef.current = anim;
-      anim.start(({ finished }) => {
-        if (finished && running.current) {
-          travelPlane();
-        }
-      });
-    };
+    if (mode === "PRO") {
+      const baseSpeed = DIAGONAL_SPEED;
+      let vx = 0;
+      let vy = 0;
 
-    travelPlane();
+      if (bounds.canMoveX && bounds.canMoveY) {
+        const minimumComponent = 0.28;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const angle = randomBetween(0, Math.PI * 2);
+          const dirX = Math.cos(angle);
+          const dirY = Math.sin(angle);
+          if (Math.abs(dirX) < 1e-3 && Math.abs(dirY) < 1e-3) {
+            continue;
+          }
+          const adjustedX =
+            Math.abs(dirX) < minimumComponent
+              ? minimumComponent * Math.sign(dirX || (Math.random() < 0.5 ? 1 : -1))
+              : dirX;
+          const adjustedY =
+            Math.abs(dirY) < minimumComponent
+              ? minimumComponent * Math.sign(dirY || (Math.random() < 0.5 ? 1 : -1))
+              : dirY;
+          const magnitude = Math.hypot(adjustedX, adjustedY);
+          if (magnitude > 0) {
+            vx = (adjustedX / magnitude) * baseSpeed;
+            vy = (adjustedY / magnitude) * baseSpeed;
+            break;
+          }
+        }
+      } else if (bounds.canMoveX) {
+        vx = (Math.random() < 0.5 ? -1 : 1) * baseSpeed;
+      } else if (bounds.canMoveY) {
+        vy = (Math.random() < 0.5 ? -1 : 1) * baseSpeed;
+      }
+
+      if (bounds.canMoveX && bounds.canMoveY && Math.abs(vx) < 1e-3 && Math.abs(vy) < 1e-3) {
+        const fallbackMag = baseSpeed / Math.SQRT2;
+        vx = fallbackMag * (Math.random() < 0.5 ? -1 : 1);
+        vy = fallbackMag * (Math.random() < 0.5 ? -1 : 1);
+      }
+
+      if (bounds.canMoveX) {
+        if (startX <= bounds.minX && vx < 0) {
+          vx = Math.abs(vx);
+        } else if (startX >= bounds.maxX && vx > 0) {
+          vx = -Math.abs(vx);
+        }
+      }
+      if (bounds.canMoveY) {
+        if (startY <= bounds.minY && vy < 0) {
+          vy = Math.abs(vy);
+        } else if (startY >= bounds.maxY && vy > 0) {
+          vy = -Math.abs(vy);
+        }
+      }
+
+      velocityRef.current = { vx, vy };
+
+      const travelWithBounces = () => {
+        if (!running.current) return;
+
+        let { vx: currentVx, vy: currentVy } = velocityRef.current;
+        if (!Number.isFinite(currentVx)) currentVx = 0;
+        if (!Number.isFinite(currentVy)) currentVy = 0;
+
+        if (Math.abs(currentVx) < 1e-3 && Math.abs(currentVy) < 1e-3) {
+          return;
+        }
+
+        const { x: originX, y: originY } = positionRef.current;
+
+        const computeTime = (
+          position: number,
+          velocity: number,
+          min: number,
+          max: number
+        ) => {
+          if (velocity > 0) {
+            return (max - position) / velocity;
+          }
+          if (velocity < 0) {
+            return (min - position) / velocity;
+          }
+          return Infinity;
+        };
+
+        const timeToX = computeTime(originX, currentVx, bounds.minX, bounds.maxX);
+        const timeToY = computeTime(originY, currentVy, bounds.minY, bounds.maxY);
+        const candidates = [timeToX, timeToY].filter((t) => Number.isFinite(t) && t > 0);
+        const nextTime = candidates.length > 0 ? Math.min(...candidates) : Infinity;
+
+        if (!Number.isFinite(nextTime) || nextTime <= 0) {
+          let corrected = false;
+          if (bounds.canMoveX && Math.abs(currentVx) >= 1e-3) {
+            if (originX <= bounds.minX + 1e-3 && currentVx < 0) {
+              currentVx = Math.abs(currentVx);
+              corrected = true;
+            } else if (originX >= bounds.maxX - 1e-3 && currentVx > 0) {
+              currentVx = -Math.abs(currentVx);
+              corrected = true;
+            }
+          }
+          if (bounds.canMoveY && Math.abs(currentVy) >= 1e-3) {
+            if (originY <= bounds.minY + 1e-3 && currentVy < 0) {
+              currentVy = Math.abs(currentVy);
+              corrected = true;
+            } else if (originY >= bounds.maxY - 1e-3 && currentVy > 0) {
+              currentVy = -Math.abs(currentVy);
+              corrected = true;
+            }
+          }
+          if (corrected) {
+            velocityRef.current = { vx: currentVx, vy: currentVy };
+            travelWithBounces();
+          }
+          return;
+        }
+
+        const destX = clamp(originX + currentVx * nextTime, bounds.minX, bounds.maxX);
+        const destY = clamp(originY + currentVy * nextTime, bounds.minY, bounds.maxY);
+        const duration = Math.max(160, nextTime * 1000);
+        const anim = Animated.parallel([
+          Animated.timing(x, {
+            toValue: destX,
+            duration,
+            easing: Easing.linear,
+            useNativeDriver: false,
+          }),
+          Animated.timing(y, {
+            toValue: destY,
+            duration,
+            easing: Easing.linear,
+            useNativeDriver: false,
+          }),
+        ]);
+        animationRef.current = anim;
+        anim.start(({ finished }) => {
+          if (!finished || !running.current) {
+            return;
+          }
+
+          const epsilon = 1e-3;
+          const hitX = Number.isFinite(timeToX) && Math.abs(nextTime - timeToX) < epsilon;
+          const hitY = Number.isFinite(timeToY) && Math.abs(nextTime - timeToY) < epsilon;
+
+          positionRef.current = { x: destX, y: destY };
+          x.setValue(destX);
+          y.setValue(destY);
+
+          let nextVx = currentVx;
+          let nextVy = currentVy;
+
+          if (hitX && bounds.canMoveX) {
+            nextVx = -nextVx;
+          }
+          if (hitY && bounds.canMoveY) {
+            nextVy = -nextVy;
+          }
+
+          velocityRef.current = { vx: nextVx, vy: nextVy };
+          travelWithBounces();
+        });
+      };
+
+      travelWithBounces();
+      return;
+    }
   }, [stop, bounds, mode, x, y]);
 
   useEffect(() => stop, [stop]);
