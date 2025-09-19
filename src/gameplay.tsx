@@ -4,6 +4,7 @@ import {
   Dimensions,
   Easing,
   GestureResponderEvent,
+  LayoutChangeEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -72,6 +73,12 @@ function randomBetween(min: number, max: number) {
   return Math.random() * (max - min) + min;
 }
 
+function clamp(value: number, min: number, max: number) {
+  const lower = Math.min(min, max);
+  const upper = Math.max(min, max);
+  return Math.min(Math.max(value, lower), upper);
+}
+
 interface MotionController {
   x: Animated.Value;
   y: Animated.Value;
@@ -99,10 +106,27 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
     };
   }, [x, y]);
 
-  const minX = EDGE_PADDING;
-  const maxX = width - EDGE_PADDING;
-  const minY = EDGE_PADDING;
-  const maxY = height - EDGE_PADDING;
+  const bounds = useMemo(
+    () => {
+      const safeWidth = Math.max(0, width);
+      const safeHeight = Math.max(0, height);
+      const centerX = safeWidth / 2;
+      const centerY = safeHeight / 2;
+      const canMoveX = safeWidth > EDGE_PADDING * 2;
+      const canMoveY = safeHeight > EDGE_PADDING * 2;
+      return {
+        minX: canMoveX ? EDGE_PADDING : centerX,
+        maxX: canMoveX ? safeWidth - EDGE_PADDING : centerX,
+        minY: canMoveY ? EDGE_PADDING : centerY,
+        maxY: canMoveY ? safeHeight - EDGE_PADDING : centerY,
+        centerX,
+        centerY,
+        canMoveX,
+        canMoveY,
+      };
+    },
+    [width, height]
+  );
 
   const stop = useCallback(() => {
     running.current = false;
@@ -114,13 +138,44 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
     y.stopAnimation((value) => {
       positionRef.current.y = value;
     });
+
+    const safeX = clamp(
+      Number.isFinite(positionRef.current.x) ? positionRef.current.x : bounds.centerX,
+      bounds.minX,
+      bounds.maxX
+    );
+    const safeY = clamp(
+      Number.isFinite(positionRef.current.y) ? positionRef.current.y : bounds.centerY,
+      bounds.minY,
+      bounds.maxY
+    );
+
+    positionRef.current = { x: safeX, y: safeY };
+
     return { ...positionRef.current };
-  }, [x, y]);
+  }, [x, y, bounds]);
+
+  useEffect(() => {
+    const safeX = clamp(
+      Number.isFinite(positionRef.current.x) ? positionRef.current.x : bounds.centerX,
+      bounds.minX,
+      bounds.maxX
+    );
+    const safeY = clamp(
+      Number.isFinite(positionRef.current.y) ? positionRef.current.y : bounds.centerY,
+      bounds.minY,
+      bounds.maxY
+    );
+
+    positionRef.current = { x: safeX, y: safeY };
+    x.setValue(safeX);
+    y.setValue(safeY);
+  }, [bounds, x, y]);
 
   const start = useCallback(() => {
     stop();
-    const startX = randomBetween(minX, maxX);
-    const startY = mode === "NORMAL" ? height / 2 : randomBetween(minY, maxY);
+    const startX = randomBetween(bounds.minX, bounds.maxX);
+    const startY = mode === "NORMAL" ? bounds.centerY : randomBetween(bounds.minY, bounds.maxY);
     x.setValue(startX);
     y.setValue(startY);
     positionRef.current = { x: startX, y: startY };
@@ -129,10 +184,18 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
       return;
     }
 
+    if (mode === "NORMAL" && !bounds.canMoveX) {
+      return;
+    }
+
+    if (mode === "PRO" && !bounds.canMoveX && !bounds.canMoveY) {
+      return;
+    }
+
     running.current = true;
 
     if (mode === "NORMAL") {
-      const midpoint = (minX + maxX) / 2;
+      const midpoint = (bounds.minX + bounds.maxX) / 2;
       const travel = (nextX: number) => {
         if (!running.current) return;
         const distance = Math.abs(nextX - positionRef.current.x);
@@ -146,19 +209,19 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
         animationRef.current = anim;
         anim.start(({ finished }) => {
           if (finished && running.current) {
-            travel(nextX === maxX ? minX : maxX);
+            travel(nextX === bounds.maxX ? bounds.minX : bounds.maxX);
           }
         });
       };
-      const firstTarget = startX > midpoint ? minX : maxX;
+      const firstTarget = positionRef.current.x > midpoint ? bounds.minX : bounds.maxX;
       travel(firstTarget);
       return;
     }
 
     const travelPlane = () => {
       if (!running.current) return;
-      const destX = randomBetween(minX, maxX);
-      const destY = randomBetween(minY, maxY);
+      const destX = bounds.canMoveX ? randomBetween(bounds.minX, bounds.maxX) : bounds.minX;
+      const destY = bounds.canMoveY ? randomBetween(bounds.minY, bounds.maxY) : bounds.minY;
       const dx = destX - positionRef.current.x;
       const dy = destY - positionRef.current.y;
       const distance = Math.hypot(dx, dy);
@@ -186,7 +249,7 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
     };
 
     travelPlane();
-  }, [stop, minX, maxX, minY, maxY, height, mode, x, y]);
+  }, [stop, bounds, mode, x, y]);
 
   useEffect(() => stop, [stop]);
 
@@ -238,7 +301,11 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   const [phase, setPhase] = useState<Phase>("observe");
   const [countdown, setCountdown] = useState(COUNTDOWN_STEPS);
   const [result, setResult] = useState<ResultState | null>(null);
-  const { x, y, start, stop } = useTargetMotion(mode, SCREEN_W, SCREEN_H);
+  const [fieldSize, setFieldSize] = useState<{ width: number; height: number } | null>(null);
+  const fieldWidth = fieldSize?.width ?? SCREEN_W;
+  const fieldHeight = fieldSize?.height ?? SCREEN_H;
+  const isFieldReady = fieldSize !== null;
+  const { x, y, start, stop } = useTargetMotion(mode, fieldWidth, fieldHeight);
   const startRef = useRef(0);
   const resultAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const shake = useRef(new Animated.Value(0)).current;
@@ -249,9 +316,23 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
         { translateX: Animated.subtract(x, TARGET_RADIUS) },
         { translateY: Animated.subtract(y, TARGET_RADIUS) },
       ],
+      opacity: isFieldReady ? 1 : 0,
     }),
-    [x, y]
+    [x, y, isFieldReady]
   );
+
+  const handleFieldLayout = useCallback((evt: LayoutChangeEvent) => {
+    const { width, height } = evt.nativeEvent.layout;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    setFieldSize((prev) => {
+      if (prev && prev.width === width && prev.height === height) {
+        return prev;
+      }
+      return { width, height };
+    });
+  }, []);
 
   const shakeStyle = useMemo(
     () => ({
@@ -268,13 +349,13 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   );
 
   useEffect(() => {
-    if (phase !== "observe") return;
+    if (phase !== "observe" || !isFieldReady) return;
     start();
     const timer = setTimeout(() => {
       setPhase("countdown");
     }, OBSERVE_DURATION);
     return () => clearTimeout(timer);
-  }, [phase, start]);
+  }, [phase, start, isFieldReady]);
 
   useEffect(() => {
     if (phase !== "countdown") return;
@@ -323,6 +404,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
 
   useEffect(() => {
     if (phase !== "result" || !result || result.saveState.status !== "pending") return;
+    if (fieldWidth <= 0 || fieldHeight <= 0) return;
     let cancelled = false;
     (async () => {
       try {
@@ -332,8 +414,8 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
           mode,
           distancePx: result.distancePx,
           reactionMs: result.reactionMs,
-          screenWidth: SCREEN_W,
-          screenHeight: SCREEN_H,
+          screenWidth: fieldWidth,
+          screenHeight: fieldHeight,
           targetX: result.target.x,
           targetY: result.target.y,
           guessX: result.guess.x,
@@ -371,11 +453,11 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
     return () => {
       cancelled = true;
     };
-  }, [phase, result, mode]);
+  }, [phase, result, mode, fieldWidth, fieldHeight]);
 
   const handleGuess = useCallback(
     (evt: GestureResponderEvent) => {
-      if (phase !== "guess") return;
+      if (phase !== "guess" || !isFieldReady) return;
       const guess = {
         x: evt.nativeEvent.locationX,
         y: evt.nativeEvent.locationY,
@@ -383,7 +465,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       const target = stop();
       const reactionMs = Date.now() - startRef.current;
       const distancePx = Math.hypot(guess.x - target.x, guess.y - target.y);
-      const maxDistance = Math.hypot(SCREEN_W, SCREEN_H);
+      const maxDistance = Math.max(1, Math.hypot(fieldWidth, fieldHeight));
       const score = calculateScore(distancePx, reactionMs, maxDistance);
       setResult({
         reactionMs,
@@ -395,7 +477,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       });
       setPhase("result");
     },
-    [phase, stop]
+    [phase, stop, isFieldReady, fieldWidth, fieldHeight]
   );
 
   const resetGame = useCallback(() => {
@@ -436,7 +518,12 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
         <Text style={styles.modeSubtitle}>{detail.description}</Text>
       </View>
       <Animated.View style={[styles.fieldWrapper, shakeStyle]}>
-        <Pressable style={styles.field} disabled={phase !== "guess"} onPress={handleGuess}>
+        <Pressable
+          style={styles.field}
+          onLayout={handleFieldLayout}
+          disabled={phase !== "guess" || !isFieldReady}
+          onPress={handleGuess}
+        >
           <Animated.View style={[styles.target, targetStyle]}>
             <ArcheryTarget />
           </Animated.View>
