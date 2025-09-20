@@ -15,7 +15,7 @@ export default function Layout() {
         }}
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="nickname" options={{ title: "Choose Nickname" }} />
+        <Stack.Screen name="players" options={{ title: "Players" }} />
         <Stack.Screen name="main" options={{ title: "Main Menu" }} />
         <Stack.Screen name="gamemodes" options={{ title: "Play" }} />
         <Stack.Screen name="simple" options={{ title: "Simple Mode" }} />
