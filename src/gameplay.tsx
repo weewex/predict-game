@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { calculateScore } from "./score";
-import { getNickname, saveScoreEntry } from "./storage";
+import { getActivePlayer, saveScoreEntry } from "./storage";
 import type { GameMode, ScorePayload } from "./types";
 import { palette } from "./theme";
 import { MenuButton } from "./ui";
@@ -479,6 +479,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   const [phase, setPhase] = useState<Phase>("observe");
   const [countdown, setCountdown] = useState(COUNTDOWN_STEPS);
   const [result, setResult] = useState<ResultState | null>(null);
+  const [activePlayerName, setActivePlayerName] = useState<string | null>(null);
   const [fieldSize, setFieldSize] = useState<{ width: number; height: number } | null>(null);
   const [fieldOffset, setFieldOffset] = useState<{ x: number; y: number } | null>(null);
   const fieldWidth = fieldSize?.width ?? SCREEN_W;
@@ -489,6 +490,8 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   const fieldRef = useRef<View>(null);
   const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
   const resultAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const resultButtonsOpacity = useRef(new Animated.Value(0)).current;
+  const [buttonsInteractive, setButtonsInteractive] = useState(false);
   const shake = useRef(new Animated.Value(0)).current;
 
   const targetStyle = useMemo(
@@ -553,6 +556,19 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   );
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const active = await getActivePlayer();
+      if (!cancelled) {
+        setActivePlayerName(active?.name ?? null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (phase !== "observe" || !isFieldReady) return;
     start();
     const timer = setTimeout(() => {
@@ -607,14 +623,43 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   }, [phase, result, resultAnims, shake]);
 
   useEffect(() => {
+    if (phase !== "result" || !result) {
+      resultButtonsOpacity.setValue(0);
+      setButtonsInteractive(false);
+      return;
+    }
+    resultButtonsOpacity.setValue(0);
+    setButtonsInteractive(false);
+    const animation = Animated.timing(resultButtonsOpacity, {
+      toValue: 1,
+      duration: 320,
+      delay: 2000,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start(({ finished }) => {
+      if (finished) {
+        setButtonsInteractive(true);
+      }
+    });
+    return () => {
+      animation.stop();
+    };
+  }, [phase, result, resultButtonsOpacity]);
+
+  useEffect(() => {
     if (phase !== "result" || !result || result.saveState.status !== "pending") return;
     if (fieldWidth <= 0 || fieldHeight <= 0) return;
     let cancelled = false;
     (async () => {
       try {
-        const nickname = (await getNickname()) ?? "anon";
+        const activePlayer = await getActivePlayer();
+        if (!cancelled) {
+          setActivePlayerName(activePlayer?.name ?? null);
+        }
         const payload: ScorePayload = {
-          nickname,
+          nickname: activePlayer?.name ?? "anon",
+          playerId: activePlayer?.id ?? null,
           mode,
           distancePx: result.distancePx,
           reactionMs: result.reactionMs,
@@ -748,6 +793,9 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       <View style={styles.header}>
         <Text style={styles.modeTitle}>{detail.label} Mode</Text>
         <Text style={styles.modeSubtitle}>{detail.description}</Text>
+        <Text style={styles.playerBadge}>
+          {activePlayerName ? `Active player · ${activePlayerName}` : "No active player selected"}
+        </Text>
       </View>
       <Animated.View style={[styles.fieldWrapper, shakeStyle]}>
         <Pressable
@@ -844,12 +892,28 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
                     {result.saveState.message}
                   </Text>
                 )}
-                <View style={styles.resultButtons}>
+                <Animated.View
+                  style={[
+                    styles.resultButtons,
+                    {
+                      opacity: resultButtonsOpacity,
+                      transform: [
+                        {
+                          translateY: resultButtonsOpacity.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [16, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                  pointerEvents={buttonsInteractive ? "auto" : "none"}
+                >
                   <MenuButton title="Play again" onPress={resetGame} style={styles.inlineButton} />
                   {onExit && (
                     <MenuButton title="Back to modes" onPress={onExit} style={styles.inlineButton} />
                   )}
-                </View>
+                </Animated.View>
               </View>
             </View>
           )}
@@ -877,6 +941,20 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
     fontSize: 14,
     marginTop: 4,
+  },
+  playerBadge: {
+    marginTop: 12,
+    alignSelf: "flex-start",
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: palette.surfaceAlt,
+    borderWidth: 1,
+    borderColor: palette.border,
+    color: palette.textSecondary,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
   },
   fieldWrapper: {
     flex: 1,

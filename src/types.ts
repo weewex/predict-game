@@ -1,4 +1,11 @@
 export type GameMode = "SIMPLE" | "NORMAL" | "PRO";
+
+export interface PlayerProfile {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
 export interface ScorePayload {
   nickname: string;
   mode: GameMode;
@@ -12,4 +19,5 @@ export interface ScorePayload {
   guessY: number;
   timestamp: string;
   score: number;
+  playerId?: string | null;
 }

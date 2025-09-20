@@ -1,12 +1,13 @@
 import { Redirect } from "expo-router";
 import { useEffect, useState } from "react";
-import { getNickname } from "../src/storage";
+import { getActivePlayer } from "../src/storage";
+import type { PlayerProfile } from "../src/types";
 
 export default function Index() {
-  const [nick, setNick] = useState<string | null | undefined>(undefined);
+  const [activePlayer, setActivePlayer] = useState<PlayerProfile | null | undefined>(undefined);
   useEffect(() => {
-    getNickname().then(setNick);
+    getActivePlayer().then(setActivePlayer);
   }, []);
-  if (nick === undefined) return null;
-  return <Redirect href={nick ? "/main" : "/nickname"} />;
+  if (activePlayer === undefined) return null;
+  return <Redirect href={activePlayer ? "/main" : "/players"} />;
 }

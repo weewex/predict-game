@@ -1,9 +1,24 @@
 import React from "react";
 import { TouchableOpacity, Text, StyleSheet, ViewStyle } from "react-native";
 import { palette } from "./theme";
-export function MenuButton({ title, onPress, style }: { title: string; onPress: () => void; style?: ViewStyle }) {
+export function MenuButton({
+  title,
+  onPress,
+  style,
+  disabled = false,
+}: {
+  title: string;
+  onPress: () => void;
+  style?: ViewStyle;
+  disabled?: boolean;
+}) {
   return (
-    <TouchableOpacity onPress={onPress} style={[styles.btn, style]} activeOpacity={0.82}>
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.btn, disabled && styles.btnDisabled, style]}
+      activeOpacity={0.82}
+      disabled={disabled}
+    >
       <Text style={styles.btnText}>{title}</Text>
     </TouchableOpacity>
   );
@@ -23,6 +38,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     shadowRadius: 14,
     elevation: 4,
+  },
+  btnDisabled: {
+    opacity: 0.5,
   },
   btnText: { color: palette.textPrimary, fontSize: 16, fontWeight: "700" },
 });
