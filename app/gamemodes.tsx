@@ -1,7 +1,7 @@
 import React from "react";
 import { View, StyleSheet, Text } from "react-native";
 import { router } from "expo-router";
-import { MenuButton } from "../src/ui";
+import { MenuButton, PlayerSwitcher } from "../src/ui";
 import { palette } from "../src/theme";
 
 const modes = [
@@ -20,14 +20,37 @@ const modes = [
     subtitle: "Full-field movement. Track both axes at once.",
     path: "/pro",
   },
+  {
+    title: "Extreme",
+    subtitle: "Two targets at once. Double the challenge.",
+    path: "/extreme",
+  },
+];
+
+const extras = [
+  {
+    title: "Local Multiplayer",
+    subtitle: "Face off across three rounds of five shots each.",
+    path: "/local",
+  },
 ];
 
 export default function GamemodeScreen() {
   return (
     <View style={styles.safe}>
       <View style={styles.container}>
-        <Text style={styles.title}>Choose your challenge</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>Choose your challenge</Text>
+          <PlayerSwitcher style={styles.switcher} />
+        </View>
         {modes.map((mode) => (
+          <View key={mode.title} style={styles.option}>
+            <MenuButton title={mode.title} onPress={() => router.push(mode.path)} style={styles.optionButton} />
+            <Text style={styles.subtitle}>{mode.subtitle}</Text>
+          </View>
+        ))}
+        <Text style={styles.sectionLabel}>Party modes</Text>
+        {extras.map((mode) => (
           <View key={mode.title} style={styles.option}>
             <MenuButton title={mode.title} onPress={() => router.push(mode.path)} style={styles.optionButton} />
             <Text style={styles.subtitle}>{mode.subtitle}</Text>
@@ -41,12 +64,13 @@ export default function GamemodeScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   container: { flex: 1, justifyContent: "center", padding: 24 },
+  titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   title: {
     color: palette.textPrimary,
     fontSize: 24,
     fontWeight: "700",
-    marginBottom: 24,
   },
+  switcher: { marginLeft: 16 },
   option: {
     backgroundColor: palette.surface,
     borderRadius: 16,
@@ -67,5 +91,13 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
     fontSize: 13,
     marginTop: 8,
+  },
+  sectionLabel: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    marginTop: 12,
+    marginBottom: 10,
   },
 });

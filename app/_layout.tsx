@@ -21,7 +21,9 @@ export default function Layout() {
         <Stack.Screen name="simple" options={{ title: "Simple Mode" }} />
         <Stack.Screen name="normal" options={{ title: "Normal Mode" }} />
         <Stack.Screen name="pro" options={{ title: "Pro Mode" }} />
+        <Stack.Screen name="extreme" options={{ title: "Extreme Mode" }} />
         <Stack.Screen name="leaderboard" options={{ title: "Leaderboard" }} />
+        <Stack.Screen name="local" options={{ title: "Local Multiplayer" }} />
       </Stack>
     </>
   );
