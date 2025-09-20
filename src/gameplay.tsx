@@ -11,10 +11,10 @@ import {
   View,
 } from "react-native";
 import { calculateScore } from "./score";
-import { getActivePlayer, saveScoreEntry } from "./storage";
-import type { GameMode, ScorePayload } from "./types";
+import { getActivePlayer, saveScoreEntry, subscribeActivePlayer } from "./storage";
+import type { AttemptDetail, GameMode, ScorePayload } from "./types";
 import { palette } from "./theme";
-import { MenuButton } from "./ui";
+import { MenuButton, PlayerSwitcher } from "./ui";
 
 const TARGET_SIZE = 72;
 const TARGET_RADIUS = TARGET_SIZE / 2;
@@ -30,12 +30,20 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 
 type Phase = "observe" | "countdown" | "guess" | "result";
 
-interface ResultState {
-  reactionMs: number;
-  distancePx: number;
-  score: number;
+interface ResultPair {
   target: { x: number; y: number };
   guess: { x: number; y: number };
+  distancePx: number;
+}
+
+export interface GameAttemptResult {
+  reactionMs: number;
+  score: number;
+  averageDistancePx: number;
+  pairs: ResultPair[];
+}
+
+interface ResultState extends GameAttemptResult {
   saveState: { status: "pending" | "saved" | "error"; message?: string };
 }
 
@@ -51,6 +59,10 @@ const modeDetails: Record<GameMode, { label: string; description: string }> = {
   PRO: {
     label: "Pro",
     description: "Free-flight motion in two dimensions. Track both axes to land the shot.",
+  },
+  EXTREME: {
+    label: "Extreme",
+    description: "Twin targets weave through the arena. Track and tag both before time runs out.",
   },
 };
 
@@ -68,6 +80,25 @@ const phaseCopy: Record<Exclude<Phase, "result">, { title: string; subtitle: str
     subtitle: "Tap where you believe the target is right now",
   },
 };
+
+const EXTREME_TARGET_COUNT = 2;
+
+const markerColorPairs = [
+  {
+    target: palette.positive,
+    targetBorder: "rgba(14,33,23,0.6)",
+    guess: palette.negative,
+    guessBorder: "rgba(48,14,18,0.6)",
+    label: "Target 1",
+  },
+  {
+    target: "#60A5FA",
+    targetBorder: "rgba(46,74,110,0.55)",
+    guess: "#FBBF24",
+    guessBorder: "rgba(120,82,14,0.55)",
+    label: "Target 2",
+  },
+];
 
 function randomBetween(min: number, max: number) {
   return Math.random() * (max - min) + min;
@@ -126,13 +157,20 @@ interface MotionController {
   stop: () => { x: number; y: number };
 }
 
-function useTargetMotion(mode: GameMode, width: number, height: number): MotionController {
+function useTargetMotion(
+  mode: GameMode,
+  width: number,
+  height: number,
+  options?: { seed?: number }
+): MotionController {
   const x = useRef(new Animated.Value(width / 2)).current;
   const y = useRef(new Animated.Value(height / 2)).current;
   const running = useRef(false);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
   const positionRef = useRef({ x: width / 2, y: height / 2 });
   const velocityRef = useRef({ vx: 0, vy: 0 });
+  const seed = options?.seed ?? 0;
+  const baseMode = mode === "EXTREME" ? "PRO" : mode;
 
   useEffect(() => {
     const xListener = x.addListener(({ value }) => {
@@ -216,27 +254,31 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
 
   const start = useCallback(() => {
     stop();
-    const startX = randomBetween(bounds.minX, bounds.maxX);
-    const startY = mode === "NORMAL" ? bounds.centerY : randomBetween(bounds.minY, bounds.maxY);
+    const offsetFactor = (Math.sin((seed + 1) * 1.618) + 1) / 2;
+    const jitterMagnitude = TARGET_RADIUS * 1.4;
+    const startXRaw = randomBetween(bounds.minX, bounds.maxX);
+    const startYRaw = baseMode === "NORMAL" ? bounds.centerY : randomBetween(bounds.minY, bounds.maxY);
+    const startX = clamp(startXRaw + (offsetFactor - 0.5) * jitterMagnitude, bounds.minX, bounds.maxX);
+    const startY = clamp(startYRaw + (offsetFactor - 0.5) * jitterMagnitude * 0.75, bounds.minY, bounds.maxY);
     x.setValue(startX);
     y.setValue(startY);
     positionRef.current = { x: startX, y: startY };
 
-    if (mode === "SIMPLE") {
+    if (baseMode === "SIMPLE") {
       return;
     }
 
-    if (mode === "NORMAL" && !bounds.canMoveX) {
+    if (baseMode === "NORMAL" && !bounds.canMoveX) {
       return;
     }
 
-    if (mode === "PRO" && !bounds.canMoveX && !bounds.canMoveY) {
+    if (baseMode === "PRO" && !bounds.canMoveX && !bounds.canMoveY) {
       return;
     }
 
     running.current = true;
 
-    if (mode === "NORMAL") {
+    if (baseMode === "NORMAL") {
       const midpoint = (bounds.minX + bounds.maxX) / 2;
       const travel = (nextX: number) => {
         if (!running.current) return;
@@ -260,15 +302,17 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
       return;
     }
 
-    if (mode === "PRO") {
-      const baseSpeed = DIAGONAL_SPEED;
+    if (baseMode === "PRO") {
+      const speedBoost = mode === "EXTREME" ? 1.18 : 1;
+      const baseSpeed = DIAGONAL_SPEED * speedBoost;
       let vx = 0;
       let vy = 0;
 
       if (bounds.canMoveX && bounds.canMoveY) {
         const minimumComponent = 0.28;
         for (let attempt = 0; attempt < 8; attempt += 1) {
-          const angle = randomBetween(0, Math.PI * 2);
+          const angleOffset = (seed % 4) * Math.PI * 0.25;
+          const angle = randomBetween(0, Math.PI * 2) + angleOffset;
           const dirX = Math.cos(angle);
           const dirY = Math.sin(angle);
           if (Math.abs(dirX) < 1e-3 && Math.abs(dirY) < 1e-3) {
@@ -427,7 +471,7 @@ function useTargetMotion(mode: GameMode, width: number, height: number): MotionC
       travelWithBounces();
       return;
     }
-  }, [stop, bounds, mode, x, y]);
+  }, [stop, bounds, baseMode, mode, x, y, seed]);
 
   useEffect(() => stop, [stop]);
 
@@ -470,40 +514,110 @@ function ArcheryTarget() {
   );
 }
 
+
+type ResultActionRenderer = (args: {
+  reset: () => void;
+  exit?: () => void;
+  result: GameAttemptResult;
+}) => React.ReactNode;
+
 export interface GameScreenProps {
   mode: GameMode;
   onExit?: () => void;
+  persistScore?: boolean;
+  onAttemptComplete?: (result: GameAttemptResult) => void;
+  renderResultActions?: ResultActionRenderer;
+  showPlayerSwitcher?: boolean;
 }
 
-export function GameScreen({ mode, onExit }: GameScreenProps) {
+export function GameScreen({
+  mode,
+  onExit,
+  persistScore = true,
+  onAttemptComplete,
+  renderResultActions,
+  showPlayerSwitcher = true,
+}: GameScreenProps) {
+  const isExtreme = mode === "EXTREME";
   const [phase, setPhase] = useState<Phase>("observe");
   const [countdown, setCountdown] = useState(COUNTDOWN_STEPS);
   const [result, setResult] = useState<ResultState | null>(null);
   const [activePlayerName, setActivePlayerName] = useState<string | null>(null);
   const [fieldSize, setFieldSize] = useState<{ width: number; height: number } | null>(null);
   const [fieldOffset, setFieldOffset] = useState<{ x: number; y: number } | null>(null);
+  const [buttonsInteractive, setButtonsInteractive] = useState(false);
+  const [extremeProgress, setExtremeProgress] = useState(0);
+
   const fieldWidth = fieldSize?.width ?? SCREEN_W;
   const fieldHeight = fieldSize?.height ?? SCREEN_H;
   const isFieldReady = fieldSize !== null;
-  const { x, y, start, stop } = useTargetMotion(mode, fieldWidth, fieldHeight);
+
+  const {
+    x: primaryX,
+    y: primaryY,
+    start: startPrimary,
+    stop: stopPrimary,
+  } = useTargetMotion(mode, fieldWidth, fieldHeight, { seed: 1 });
+  const {
+    x: secondaryX,
+    y: secondaryY,
+    start: startSecondary,
+    stop: stopSecondary,
+  } = useTargetMotion("EXTREME", fieldWidth, fieldHeight, { seed: 7 });
+
   const startRef = useRef(0);
   const fieldRef = useRef<View>(null);
   const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const targetSnapshotsRef = useRef<{ x: number; y: number }[] | null>(null);
+  const guessesRef = useRef<{ x: number; y: number }[]>([]);
   const resultAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const resultButtonsOpacity = useRef(new Animated.Value(0)).current;
-  const [buttonsInteractive, setButtonsInteractive] = useState(false);
   const shake = useRef(new Animated.Value(0)).current;
 
-  const targetStyle = useMemo(
+  const primaryTargetStyle = useMemo(
     () => ({
       transform: [
-        { translateX: Animated.subtract(x, TARGET_RADIUS) },
-        { translateY: Animated.subtract(y, TARGET_RADIUS) },
+        { translateX: Animated.subtract(primaryX, TARGET_RADIUS) },
+        { translateY: Animated.subtract(primaryY, TARGET_RADIUS) },
       ],
       opacity: isFieldReady ? 1 : 0,
     }),
-    [x, y, isFieldReady]
+    [primaryX, primaryY, isFieldReady]
   );
+
+  const secondaryTargetStyle = useMemo(
+    () => ({
+      transform: [
+        { translateX: Animated.subtract(secondaryX, TARGET_RADIUS) },
+        { translateY: Animated.subtract(secondaryY, TARGET_RADIUS) },
+      ],
+      opacity: isExtreme && isFieldReady ? 1 : 0,
+    }),
+    [secondaryX, secondaryY, isExtreme, isFieldReady]
+  );
+
+  const shakeStyle = useMemo(
+    () => ({
+      transform: [
+        {
+          translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-10, 10] }),
+        },
+        {
+          translateY: shake.interpolate({ inputRange: [-1, 1], outputRange: [-6, 6] }),
+        },
+      ],
+    }),
+    [shake]
+  );
+
+  useEffect(() => {
+    const unsubscribe = subscribeActivePlayer((player) => {
+      setActivePlayerName(player?.name ?? null);
+    });
+    return unsubscribe;
+  }, []);
+
+  const detail = modeDetails[mode];
 
   const handleFieldLayout = useCallback((evt: LayoutChangeEvent) => {
     const { width, height } = evt.nativeEvent.layout;
@@ -541,41 +655,30 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
     [phase, isFieldReady, fieldOffset, fieldWidth, fieldHeight]
   );
 
-  const shakeStyle = useMemo(
-    () => ({
-      transform: [
-        {
-          translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-10, 10] }),
-        },
-        {
-          translateY: shake.interpolate({ inputRange: [-1, 1], outputRange: [-6, 6] }),
-        },
-      ],
-    }),
-    [shake]
-  );
+  const startTargets = useCallback(() => {
+    startPrimary();
+    if (isExtreme) {
+      startSecondary();
+    }
+  }, [startPrimary, startSecondary, isExtreme]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const active = await getActivePlayer();
-      if (!cancelled) {
-        setActivePlayerName(active?.name ?? null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const stopTargets = useCallback(() => {
+    const primary = stopPrimary();
+    if (isExtreme) {
+      const secondary = stopSecondary();
+      return [primary, secondary];
+    }
+    return [primary];
+  }, [stopPrimary, stopSecondary, isExtreme]);
 
   useEffect(() => {
     if (phase !== "observe" || !isFieldReady) return;
-    start();
+    startTargets();
     const timer = setTimeout(() => {
       setPhase("countdown");
     }, OBSERVE_DURATION);
     return () => clearTimeout(timer);
-  }, [phase, start, isFieldReady]);
+  }, [phase, isFieldReady, startTargets]);
 
   useEffect(() => {
     if (phase !== "countdown") return;
@@ -648,6 +751,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
   }, [phase, result, resultButtonsOpacity]);
 
   useEffect(() => {
+    if (!persistScore) return;
     if (phase !== "result" || !result || result.saveState.status !== "pending") return;
     if (fieldWidth <= 0 || fieldHeight <= 0) return;
     let cancelled = false;
@@ -657,20 +761,29 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
         if (!cancelled) {
           setActivePlayerName(activePlayer?.name ?? null);
         }
+        const attempts: AttemptDetail[] = result.pairs.map((pair) => ({
+          targetX: pair.target.x,
+          targetY: pair.target.y,
+          guessX: pair.guess.x,
+          guessY: pair.guess.y,
+          distancePx: pair.distancePx,
+        }));
+        const primaryPair = attempts[0];
         const payload: ScorePayload = {
           nickname: activePlayer?.name ?? "anon",
           playerId: activePlayer?.id ?? null,
           mode,
-          distancePx: result.distancePx,
+          distancePx: result.averageDistancePx,
           reactionMs: result.reactionMs,
           screenWidth: fieldWidth,
           screenHeight: fieldHeight,
-          targetX: result.target.x,
-          targetY: result.target.y,
-          guessX: result.guess.x,
-          guessY: result.guess.y,
+          targetX: primaryPair?.targetX ?? 0,
+          targetY: primaryPair?.targetY ?? 0,
+          guessX: primaryPair?.guessX ?? 0,
+          guessY: primaryPair?.guessY ?? 0,
           timestamp: new Date().toISOString(),
           score: result.score,
+          attempts,
         };
         await saveScoreEntry(payload);
         if (!cancelled) {
@@ -702,7 +815,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
     return () => {
       cancelled = true;
     };
-  }, [phase, result, mode, fieldWidth, fieldHeight]);
+  }, [phase, result, persistScore, mode, fieldWidth, fieldHeight]);
 
   const handleGuess = useCallback(
     (evt: GestureResponderEvent) => {
@@ -718,9 +831,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
         !!fallbackTouch &&
         (!Number.isFinite(guessX) ||
           !Number.isFinite(guessY) ||
-          (guessX === 0 &&
-            guessY === 0 &&
-            (fallbackTouch.x !== 0 || fallbackTouch.y !== 0)));
+          (guessX === 0 && guessY === 0 && (fallbackTouch.x !== 0 || fallbackTouch.y !== 0)));
 
       if (shouldUseFallback) {
         guessX = fallbackTouch.x;
@@ -739,31 +850,78 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
         y: clamp(guessY - 25, 0, fieldHeight),
       };
       lastTouchRef.current = null;
-      const target = stop();
-      const reactionMs = Date.now() - startRef.current;
-      const distancePx = Math.hypot(guess.x - target.x, guess.y - target.y);
-      const maxDistance = Math.max(1, Math.hypot(fieldWidth, fieldHeight));
-      const score = calculateScore(distancePx, reactionMs, maxDistance);
-      setResult({
-        reactionMs,
-        distancePx,
-        score,
-        target,
-        guess,
-        saveState: { status: "pending" },
+
+      if (!targetSnapshotsRef.current) {
+        targetSnapshotsRef.current = stopTargets();
+      }
+
+      guessesRef.current = [...guessesRef.current, guess];
+      const requiredShots = isExtreme ? EXTREME_TARGET_COUNT : 1;
+      const shotsTaken = guessesRef.current.length;
+
+      if (isExtreme && shotsTaken < requiredShots) {
+        setExtremeProgress(shotsTaken);
+        return;
+      }
+
+      const snapshots = targetSnapshotsRef.current ?? stopTargets();
+      const pairs: ResultPair[] = snapshots.map((target, index) => {
+        const shot = guessesRef.current[index] ?? guessesRef.current[guessesRef.current.length - 1];
+        return {
+          target,
+          guess: shot,
+          distancePx: Math.hypot(shot.x - target.x, shot.y - target.y),
+        };
       });
+
+      const averageDistance =
+        pairs.length > 0
+          ? pairs.reduce((sum, pair) => sum + pair.distancePx, 0) / pairs.length
+          : 0;
+
+      const reactionMs = Date.now() - startRef.current;
+      const maxDistance = Math.max(1, Math.hypot(fieldWidth, fieldHeight));
+      const score = calculateScore(averageDistance, reactionMs, maxDistance);
+
+      const attempt: GameAttemptResult = {
+        reactionMs,
+        score,
+        averageDistancePx: averageDistance,
+        pairs,
+      };
+
+      const saveState = persistScore
+        ? { status: "pending" as const }
+        : { status: "saved" as const, message: "Session only – not saved" };
+
+      setResult({ ...attempt, saveState });
       setPhase("result");
+      guessesRef.current = [];
+      targetSnapshotsRef.current = null;
+      setExtremeProgress(0);
+      onAttemptComplete?.(attempt);
     },
-    [phase, stop, isFieldReady, fieldWidth, fieldHeight, fieldOffset]
+    [
+      phase,
+      isFieldReady,
+      fieldOffset,
+      fieldWidth,
+      fieldHeight,
+      stopTargets,
+      persistScore,
+      onAttemptComplete,
+      isExtreme,
+    ]
   );
 
   const resetGame = useCallback(() => {
     setResult(null);
     setCountdown(COUNTDOWN_STEPS);
     setPhase("observe");
+    setExtremeProgress(0);
+    targetSnapshotsRef.current = null;
+    guessesRef.current = [];
   }, []);
-
-  const detail = modeDetails[mode];
 
   const resultItems = result
     ? [
@@ -775,8 +933,8 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
         },
         {
           key: "distance",
-          label: "Distance",
-          value: `${Math.round(result.distancePx)} px`,
+          label: result.pairs.length > 1 ? "Avg distance" : "Distance",
+          value: `${Math.round(result.averageDistancePx)} px`,
           style: styles.resultSmall,
         },
         {
@@ -788,11 +946,38 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
       ]
     : [];
 
+  const guessPrompt = isExtreme
+    ? `Shot ${Math.min(extremeProgress + 1, EXTREME_TARGET_COUNT)} of ${EXTREME_TARGET_COUNT}`
+    : "Tap now";
+
+  const guessSubtitle = isExtreme
+    ? extremeProgress === 0
+      ? "Tag the first hidden target"
+      : "Lock in the second target"
+    : phaseCopy.guess.subtitle;
+
+  const renderedActions =
+    result && renderResultActions
+      ? renderResultActions({ reset: resetGame, exit: onExit, result })
+      : (
+          <>
+            <MenuButton title="Play again" onPress={resetGame} style={styles.inlineButton} />
+            {onExit && <MenuButton title="Back to modes" onPress={onExit} style={styles.inlineButton} />}
+          </>
+        );
+
   return (
     <View style={styles.safe}>
       <View style={styles.header}>
-        <Text style={styles.modeTitle}>{detail.label} Mode</Text>
-        <Text style={styles.modeSubtitle}>{detail.description}</Text>
+        <View style={styles.headerRow}>
+          <View style={styles.titleGroup}>
+            <Text style={styles.modeTitle}>{detail.label} Mode</Text>
+            <Text style={styles.modeSubtitle}>{detail.description}</Text>
+          </View>
+          {showPlayerSwitcher && (
+            <PlayerSwitcher style={styles.switcher} onPlayerChange={(player) => setActivePlayerName(player?.name ?? null)} />
+          )}
+        </View>
         <Text style={styles.playerBadge}>
           {activePlayerName ? `Active player · ${activePlayerName}` : "No active player selected"}
         </Text>
@@ -806,31 +991,47 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
           disabled={phase !== "guess" || !isFieldReady}
           onPress={handleGuess}
         >
-          <Animated.View style={[styles.target, targetStyle]}>
+          <Animated.View style={[styles.target, primaryTargetStyle]}>
             <ArcheryTarget />
           </Animated.View>
+          {isExtreme && (
+            <Animated.View style={[styles.target, styles.secondaryTarget, secondaryTargetStyle]}>
+              <ArcheryTarget />
+            </Animated.View>
+          )}
           {phase === "result" && result && (
             <>
-              <View
-                style={[
-                  styles.marker,
-                  styles.markerTarget,
-                  {
-                    left: result.target.x - MARKER_SIZE / 2,
-                    top: result.target.y - MARKER_SIZE / 2,
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.marker,
-                  styles.markerGuess,
-                  {
-                    left: result.guess.x - MARKER_SIZE / 2,
-                    top: result.guess.y - MARKER_SIZE / 2,
-                  },
-                ]}
-              />
+              {result.pairs.map((pair, index) => {
+                const paletteEntry = markerColorPairs[index % markerColorPairs.length];
+                return (
+                  <React.Fragment key={`marker-${index}`}>
+                    <View
+                      style={[
+                        styles.marker,
+                        styles.markerTarget,
+                        {
+                          left: pair.target.x - MARKER_SIZE / 2,
+                          top: pair.target.y - MARKER_SIZE / 2,
+                          backgroundColor: paletteEntry.target,
+                          borderColor: paletteEntry.targetBorder,
+                        },
+                      ]}
+                    />
+                    <View
+                      style={[
+                        styles.marker,
+                        styles.markerGuess,
+                        {
+                          left: pair.guess.x - MARKER_SIZE / 2,
+                          top: pair.guess.y - MARKER_SIZE / 2,
+                          backgroundColor: paletteEntry.guess,
+                          borderColor: paletteEntry.guessBorder,
+                        },
+                      ]}
+                    />
+                  </React.Fragment>
+                );
+              })}
             </>
           )}
           {(phase === "countdown" || phase === "guess") && (
@@ -838,13 +1039,15 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
               style={[styles.overlay, phase === "guess" ? styles.overlayGuess : styles.overlayCountdown]}
               pointerEvents="none"
             >
-              <Text style={styles.overlayTitle}>{phaseCopy[phase].title}</Text>
+              <Text style={styles.overlayTitle}>
+                {phase === "guess" && isExtreme ? "Take the shots" : phaseCopy[phase].title}
+              </Text>
               {phase === "countdown" ? (
                 <Text style={styles.countdown}>{countdown}</Text>
               ) : (
-                <Text style={styles.guessText}>Tap now</Text>
+                <Text style={styles.guessText}>{guessPrompt}</Text>
               )}
-              <Text style={styles.overlaySubtitle}>{phaseCopy[phase].subtitle}</Text>
+              <Text style={styles.overlaySubtitle}>{phase === "guess" ? guessSubtitle : phaseCopy[phase].subtitle}</Text>
             </View>
           )}
           {phase === "result" && result && (
@@ -876,11 +1079,27 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
                     </Animated.View>
                   ))}
                 </View>
+                {result.pairs.length > 1 && (
+                  <View style={styles.pairsBreakdown}>
+                    {result.pairs.map((pair, index) => (
+                      <Text key={`pair-${index}`} style={styles.pairDistance}>
+                        {`Target ${index + 1}: ${Math.round(pair.distancePx)} px miss`}
+                      </Text>
+                    ))}
+                  </View>
+                )}
                 <View style={styles.legendRow}>
-                  <View style={[styles.legendDot, { backgroundColor: palette.positive }]} />
-                  <Text style={styles.legendText}>Actual target</Text>
-                  <View style={[styles.legendDot, { backgroundColor: palette.negative, marginLeft: 16 }]} />
-                  <Text style={styles.legendText}>Your guess</Text>
+                  {result.pairs.map((_, index) => {
+                    const paletteEntry = markerColorPairs[index % markerColorPairs.length];
+                    return (
+                      <View key={`legend-${index}`} style={styles.legendGroup}>
+                        <View style={[styles.legendDot, { backgroundColor: paletteEntry.target }]} />
+                        <Text style={styles.legendText}>{`Target ${index + 1}`}</Text>
+                        <View style={[styles.legendDot, { backgroundColor: paletteEntry.guess, marginLeft: 12 }]} />
+                        <Text style={styles.legendText}>{`Shot ${index + 1}`}</Text>
+                      </View>
+                    );
+                  })}
                 </View>
                 {result.saveState.status !== "pending" && (
                   <Text
@@ -909,10 +1128,7 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
                   ]}
                   pointerEvents={buttonsInteractive ? "auto" : "none"}
                 >
-                  <MenuButton title="Play again" onPress={resetGame} style={styles.inlineButton} />
-                  {onExit && (
-                    <MenuButton title="Back to modes" onPress={onExit} style={styles.inlineButton} />
-                  )}
+                  {renderedActions}
                 </Animated.View>
               </View>
             </View>
@@ -924,62 +1140,36 @@ export function GameScreen({ mode, onExit }: GameScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: palette.background,
-    padding: 20,
-  },
-  header: {
-    paddingVertical: 8,
-  },
-  modeTitle: {
-    color: palette.textPrimary,
-    fontSize: 24,
-    fontWeight: "700",
-  },
-  modeSubtitle: {
-    color: palette.textSecondary,
-    fontSize: 14,
-    marginTop: 4,
-  },
+  safe: { flex: 1, backgroundColor: palette.background },
+  header: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 10 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  titleGroup: { flexShrink: 1, paddingRight: 12 },
+  modeTitle: { color: palette.textPrimary, fontSize: 24, fontWeight: "800" },
+  modeSubtitle: { color: palette.textSecondary, fontSize: 13, marginTop: 4 },
+  switcher: { marginTop: -6 },
   playerBadge: {
-    marginTop: 12,
-    alignSelf: "flex-start",
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: palette.surfaceAlt,
-    borderWidth: 1,
-    borderColor: palette.border,
     color: palette.textSecondary,
     fontSize: 12,
-    letterSpacing: 0.6,
+    marginTop: 12,
     textTransform: "uppercase",
+    letterSpacing: 1,
   },
-  fieldWrapper: {
+  fieldWrapper: { flex: 1, paddingHorizontal: 12, paddingBottom: 20 },
+  field: {
     flex: 1,
-    marginTop: 16,
-    borderRadius: 20,
+    borderRadius: 24,
+    backgroundColor: palette.surface,
     borderWidth: 1,
     borderColor: palette.border,
     overflow: "hidden",
-    backgroundColor: palette.surface,
-    shadowColor: "#020806",
-    shadowOpacity: 0.45,
-    shadowOffset: { width: 0, height: 12 },
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  field: {
-    flex: 1,
   },
   target: {
     position: "absolute",
     width: TARGET_SIZE,
     height: TARGET_SIZE,
     borderRadius: TARGET_RADIUS,
-    alignItems: "center",
     justifyContent: "center",
+    alignItems: "center",
   },
   targetFace: {
     width: TARGET_SIZE,
@@ -988,6 +1178,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  secondaryTarget: { opacity: 0.75 },
   marker: {
     position: "absolute",
     width: MARKER_SIZE,
@@ -995,12 +1186,10 @@ const styles = StyleSheet.create({
     borderRadius: MARKER_SIZE / 2,
   },
   markerTarget: {
-    backgroundColor: palette.positive,
     borderWidth: 2,
     borderColor: "rgba(14,33,23,0.6)",
   },
   markerGuess: {
-    backgroundColor: palette.negative,
     borderWidth: 2,
     borderColor: "rgba(48,14,18,0.6)",
   },
@@ -1034,7 +1223,7 @@ const styles = StyleSheet.create({
   },
   guessText: {
     color: palette.textPrimary,
-    fontSize: 40,
+    fontSize: 36,
     fontWeight: "800",
     marginVertical: 18,
   },
@@ -1047,7 +1236,7 @@ const styles = StyleSheet.create({
   },
   resultsCard: {
     width: "100%",
-    maxWidth: 360,
+    maxWidth: 380,
     backgroundColor: palette.surfaceAltOpacity,
     borderRadius: 18,
     padding: 20,
@@ -1084,10 +1273,27 @@ const styles = StyleSheet.create({
     fontSize: 18,
     marginTop: 4,
   },
+  pairsBreakdown: {
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  pairDistance: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: 4,
+  },
   legendRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     marginTop: 12,
+  },
+  legendGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 18,
+    marginTop: 6,
   },
   legendDot: {
     width: 10,

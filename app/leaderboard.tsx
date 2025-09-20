@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { getActivePlayer, getScores } from "../src/storage";
+import { getActivePlayer, getScores, subscribeActivePlayer } from "../src/storage";
 import type { GameMode, PlayerProfile, ScorePayload } from "../src/types";
 import { palette } from "../src/theme";
+import { PlayerSwitcher } from "../src/ui";
 
 const modeLabels: Record<GameMode, string> = {
   SIMPLE: "Simple",
   NORMAL: "Normal",
   PRO: "Pro",
+  EXTREME: "Extreme",
 };
 
-const modes: GameMode[] = ["SIMPLE", "NORMAL", "PRO"];
+const modes: GameMode[] = ["SIMPLE", "NORMAL", "PRO", "EXTREME"];
 
 const sortOptions = [
   { key: "score", label: "Score" },
@@ -148,21 +150,45 @@ function MetricChart({ data, label, unit, color, accessor, isLowerBetter }: Metr
   });
 
   const bestValue = isLowerBetter ? Math.min(...values) : Math.max(...values);
+  const bestIndex = values.findIndex((value) => value === bestValue);
   const latestValue = values[values.length - 1];
+  const previousValue = values.length > 1 ? values[values.length - 2] : null;
+  const change = previousValue === null ? null : latestValue - previousValue;
+  const changeLabel =
+    change === null
+      ? "New data"
+      : `${change > 0 ? "+" : ""}${Math.round(change)}${unit ? ` ${unit}` : ""}`;
+  const isImproving =
+    change === null ? null : isLowerBetter ? change < 0 : change > 0;
   const firstTimestamp = samples[0]?.item.timestamp;
   const lastTimestamp = samples[samples.length - 1]?.item.timestamp;
 
   return (
     <View style={styles.chartCard}>
       <View style={styles.chartHeader}>
-        <Text style={styles.chartTitle}>{label}</Text>
-        <Text style={styles.chartMeta}>Best {formatValue(bestValue, unit)}</Text>
+        <View>
+          <Text style={styles.chartTitle}>{label}</Text>
+          <Text style={styles.chartMeta}>Best {formatValue(bestValue, unit)}</Text>
+        </View>
+        <Text
+          style={[
+            styles.chartTrend,
+            isImproving === null
+              ? styles.chartTrendNeutral
+              : isImproving
+              ? styles.chartTrendPositive
+              : styles.chartTrendNegative,
+          ]}
+        >
+          {changeLabel}
+        </Text>
       </View>
       <View style={styles.chartBars}>
         {normalizedHeights.map((ratio, index) => {
           const sample = samples[index];
           const barHeight = 18 + ratio * 92;
           const isLast = index === normalizedHeights.length - 1;
+          const isBest = index === bestIndex;
           return (
             <View key={`${sample.item.timestamp}-${index}`} style={styles.chartBarTrack}>
               <View
@@ -173,6 +199,7 @@ function MetricChart({ data, label, unit, color, accessor, isLowerBetter }: Metr
                     backgroundColor: color,
                     opacity: isLast ? 1 : 0.65,
                   },
+                  isBest && styles.chartBarBest,
                 ]}
               />
             </View>
@@ -195,6 +222,7 @@ export default function LeaderboardScreen() {
   const [activeMode, setActiveMode] = useState<GameMode>("SIMPLE");
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [activePlayer, setActivePlayer] = useState<PlayerProfile | null>(null);
+  const [showCharts, setShowCharts] = useState(false);
 
   const loadScores = useCallback(async () => {
     setLoading(true);
@@ -218,6 +246,13 @@ export default function LeaderboardScreen() {
   );
 
   useEffect(() => {
+    const unsubscribe = subscribeActivePlayer((player) => {
+      setActivePlayer(player);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     if (!data.length) return;
     if (!data.some((entry) => entry.mode === activeMode)) {
       setActiveMode(data[0].mode);
@@ -230,7 +265,7 @@ export default function LeaderboardScreen() {
         acc[entry.mode] = (acc[entry.mode] ?? 0) + 1;
         return acc;
       },
-      { SIMPLE: 0, NORMAL: 0, PRO: 0 } as Record<GameMode, number>
+      { SIMPLE: 0, NORMAL: 0, PRO: 0, EXTREME: 0 } as Record<GameMode, number>
     );
   }, [data]);
 
@@ -241,6 +276,20 @@ export default function LeaderboardScreen() {
     copy.sort(comparators[sortKey]);
     return copy;
   }, [modeData, sortKey]);
+
+  const summary = useMemo(() => {
+    if (!modeData.length) return null;
+    const totalScore = modeData.reduce((sum, entry) => sum + entry.score, 0);
+    const bestScore = Math.max(...modeData.map((entry) => entry.score));
+    const averageScore = Math.round(totalScore / modeData.length);
+    const averageReaction = Math.round(
+      modeData.reduce((sum, entry) => sum + entry.reactionMs, 0) / modeData.length
+    );
+    const averageDistance = Math.round(
+      modeData.reduce((sum, entry) => sum + entry.distancePx, 0) / modeData.length
+    );
+    return { averageScore, bestScore, averageReaction, averageDistance };
+  }, [modeData]);
 
   const renderItem = useCallback(
     ({ item, index }: { item: ScorePayload; index: number }) => {
@@ -270,6 +319,18 @@ export default function LeaderboardScreen() {
   const headerComponent = useMemo(
     () => (
       <View>
+        <View style={styles.topRow}>
+          <PlayerSwitcher style={styles.switcher} onPlayerChange={(player) => setActivePlayer(player)} />
+          <TouchableOpacity
+            style={[styles.chartToggle, showCharts && styles.chartToggleActive]}
+            onPress={() => setShowCharts((prev) => !prev)}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.chartToggleText, showCharts && styles.chartToggleTextActive]}>
+              {showCharts ? "Hide charts" : "Show charts"}
+            </Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.modeTabs}>
           {modes.map((mode) => {
             const isActive = activeMode === mode;
@@ -301,18 +362,40 @@ export default function LeaderboardScreen() {
             );
           })}
         </View>
-        <View style={styles.chartsWrapper}>
-          {metricConfigs.map((config) => (
-            <MetricChart key={config.key} data={modeData} {...config} />
-          ))}
-        </View>
+        {summary && (
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Avg score</Text>
+              <Text style={styles.summaryValue}>{summary.averageScore}</Text>
+            </View>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Best score</Text>
+              <Text style={styles.summaryValue}>{summary.bestScore}</Text>
+            </View>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Avg reaction</Text>
+              <Text style={styles.summaryValue}>{summary.averageReaction} ms</Text>
+            </View>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Avg miss</Text>
+              <Text style={styles.summaryValue}>{summary.averageDistance} px</Text>
+            </View>
+          </View>
+        )}
+        {showCharts && (
+          <View style={styles.chartsWrapper}>
+            {metricConfigs.map((config) => (
+              <MetricChart key={config.key} data={modeData} {...config} />
+            ))}
+          </View>
+        )}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Leaderboard</Text>
           {activePlayer && <Text style={styles.sectionSubtitle}>Active profile: {activePlayer.name}</Text>}
         </View>
       </View>
     ),
-    [activeMode, sortKey, modeData, modeCounts, activePlayer]
+    [activeMode, sortKey, modeData, modeCounts, activePlayer, showCharts, summary]
   );
 
   const emptyComponent = useMemo(
@@ -381,7 +464,43 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   sortChipTextActive: { color: palette.textPrimary },
+  topRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  switcher: { marginRight: 12 },
+  chartToggle: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surfaceAlt,
+  },
+  chartToggleActive: { backgroundColor: palette.accent, borderColor: palette.accent },
+  chartToggleText: { color: palette.textSecondary, fontSize: 12, letterSpacing: 1 },
+  chartToggleTextActive: { color: palette.textPrimary },
   chartsWrapper: { marginBottom: 24 },
+  summaryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginBottom: 18,
+  },
+  summaryCard: {
+    width: "48%",
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  summaryLabel: { color: palette.textSecondary, fontSize: 11, textTransform: "uppercase", letterSpacing: 1 },
+  summaryValue: { color: palette.textPrimary, fontSize: 16, fontWeight: "700", marginTop: 6 },
   chartCard: {
     backgroundColor: palette.surface,
     borderRadius: 16,
@@ -393,6 +512,10 @@ const styles = StyleSheet.create({
   chartHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   chartTitle: { color: palette.textPrimary, fontSize: 16, fontWeight: "700" },
   chartMeta: { color: palette.textSecondary, fontSize: 12 },
+  chartTrend: { fontSize: 12, fontWeight: "600", color: palette.textSecondary },
+  chartTrendPositive: { color: palette.positive },
+  chartTrendNegative: { color: palette.negative },
+  chartTrendNeutral: { color: palette.textSecondary },
   chartBars: { flexDirection: "row", alignItems: "flex-end", height: 120, marginTop: 12 },
   chartBarTrack: {
     flex: 1,
@@ -408,6 +531,7 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   chartBarFill: { width: "100%", borderRadius: 8 },
+  chartBarBest: { borderWidth: 1, borderColor: "rgba(255,255,255,0.35)" },
   chartFooter: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
   chartFooterText: { color: palette.textSecondary, fontSize: 11 },
   chartCurrent: { color: palette.textSecondary, fontSize: 12, textAlign: "right", marginTop: 6 },

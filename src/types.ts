@@ -1,4 +1,12 @@
-export type GameMode = "SIMPLE" | "NORMAL" | "PRO";
+export type GameMode = "SIMPLE" | "NORMAL" | "PRO" | "EXTREME";
+
+export interface AttemptDetail {
+  targetX: number;
+  targetY: number;
+  guessX: number;
+  guessY: number;
+  distancePx: number;
+}
 
 export interface PlayerProfile {
   id: string;
@@ -20,4 +28,5 @@ export interface ScorePayload {
   timestamp: string;
   score: number;
   playerId?: string | null;
+  attempts?: AttemptDetail[];
 }

@@ -6,6 +6,20 @@ const KEY_PLAYERS = "players";
 const KEY_ACTIVE_PLAYER = "activePlayer";
 const KEY_SCORES = "scores";
 
+type ActivePlayerListener = (player: PlayerProfile | null) => void;
+
+const activePlayerListeners = new Set<ActivePlayerListener>();
+
+function emitActivePlayerChange(player: PlayerProfile | null) {
+  activePlayerListeners.forEach((listener) => {
+    try {
+      listener(player);
+    } catch (error) {
+      console.warn("Active player listener failed", error);
+    }
+  });
+}
+
 function sanitizeName(name: string) {
   return name.trim();
 }
@@ -90,6 +104,7 @@ export async function setActivePlayer(playerId: string) {
   }
   await AsyncStorage.setItem(KEY_ACTIVE_PLAYER, target.id);
   await AsyncStorage.setItem(KEY_NICKNAME, target.name);
+  emitActivePlayerChange(target);
 }
 
 export async function getActivePlayer(): Promise<PlayerProfile | null> {
@@ -106,6 +121,27 @@ export async function getActivePlayer(): Promise<PlayerProfile | null> {
   await AsyncStorage.setItem(KEY_ACTIVE_PLAYER, fallback.id);
   await AsyncStorage.setItem(KEY_NICKNAME, fallback.name);
   return fallback;
+}
+
+export function subscribeActivePlayer(listener: ActivePlayerListener) {
+  activePlayerListeners.add(listener);
+  let cancelled = false;
+  (async () => {
+    try {
+      const player = await getActivePlayer();
+      if (!cancelled) {
+        listener(player);
+      }
+    } catch {
+      if (!cancelled) {
+        listener(null);
+      }
+    }
+  })();
+  return () => {
+    cancelled = true;
+    activePlayerListeners.delete(listener);
+  };
 }
 
 export async function saveNickname(name: string) {
@@ -136,6 +172,15 @@ export async function saveScoreEntry(entry: ScorePayload) {
     ...entry,
     nickname: sanitizeName(entry.nickname),
     playerId: entry.playerId ?? null,
+    attempts: entry.attempts
+      ? entry.attempts.map((attempt) => ({
+          targetX: attempt.targetX,
+          targetY: attempt.targetY,
+          guessX: attempt.guessX,
+          guessY: attempt.guessY,
+          distancePx: attempt.distancePx,
+        }))
+      : undefined,
   };
   const updated = [...existing, sanitized].sort((a, b) => b.score - a.score);
   await AsyncStorage.setItem(KEY_SCORES, JSON.stringify(updated));
