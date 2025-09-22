@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { GameScreen, GameAttemptResult } from "../src/gameplay";
-import { MenuButton, PlayerSwitcher } from "../src/ui";
+import { MenuButton } from "../src/ui";
 import { palette } from "../src/theme";
 import { getPlayers, setActivePlayer } from "../src/storage";
 import type { GameMode, PlayerProfile } from "../src/types";
@@ -30,6 +30,8 @@ export default function LocalMultiplayerScreen() {
   const [turn, setTurn] = useState<TurnState>({ round: 0, shot: 0, playerIndex: 0 });
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionComplete, setSessionComplete] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [completedMode, setCompletedMode] = useState<GameMode | null>(null);
   const [awaitingAdvance, setAwaitingAdvance] = useState(false);
   const [advanceLabel, setAdvanceLabel] = useState("Next attempt");
   const nextTurnRef = useRef<TurnState | null>(null);
@@ -83,13 +85,31 @@ export default function LocalMultiplayerScreen() {
             ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / attempts.length)
             : null
         );
+        const attempts = rounds.flat();
         const total = averages.reduce((sum, value) => sum + (value ?? 0), 0);
-        return { player, rounds, averages, total };
+        const highScore = attempts.length ? Math.max(...attempts.map((attempt) => attempt.score)) : null;
+        const fastestReaction = attempts.length
+          ? Math.min(...attempts.map((attempt) => attempt.reactionMs))
+          : null;
+        const tightestMiss = attempts.length
+          ? Math.min(...attempts.map((attempt) => attempt.averageDistancePx))
+          : null;
+        return { player, rounds, averages, total, highScore, fastestReaction, tightestMiss, attemptCount: attempts.length };
       })
       .sort((a, b) => b.total - a.total);
   }, [sessionPlayers, sessionRecords]);
 
   const currentPlayer = sessionPlayers[turn.playerIndex];
+
+  const activeModeDetail = useMemo(
+    () => modeOptions.find((mode) => mode.key === sessionMode) ?? modeOptions[0],
+    [sessionMode]
+  );
+
+  const completedModeDetail = useMemo(
+    () => (completedMode ? modeOptions.find((mode) => mode.key === completedMode) ?? null : null),
+    [completedMode]
+  );
 
   const handleStartSession = useCallback(async () => {
     const participants = selectedPlayers;
@@ -100,6 +120,8 @@ export default function LocalMultiplayerScreen() {
     setSessionRecords(createEmptyRecords(participants));
     setTurn({ round: 0, shot: 0, playerIndex: 0 });
     setSessionComplete(false);
+    setShowResults(false);
+    setCompletedMode(sessionMode);
     setSessionActive(true);
     setAwaitingAdvance(false);
     setAdvanceLabel("Next attempt");
@@ -108,7 +130,7 @@ export default function LocalMultiplayerScreen() {
     } catch (error) {
       console.warn("Unable to set active player", error);
     }
-  }, [selectedPlayers, createEmptyRecords]);
+  }, [selectedPlayers, createEmptyRecords, sessionMode]);
 
   const handleAttemptComplete = useCallback(
     (attempt: GameAttemptResult) => {
@@ -169,6 +191,7 @@ export default function LocalMultiplayerScreen() {
       if (sessionComplete) {
         setAwaitingAdvance(false);
         setSessionActive(false);
+        setShowResults(true);
         return;
       }
       const nextTurn = nextTurnRef.current;
@@ -194,13 +217,79 @@ export default function LocalMultiplayerScreen() {
 
   return (
     <View style={styles.safe}>
-      {sessionActive ? (
+      {showResults ? (
+        <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContent}>
+          <Text style={styles.title}>Match results</Text>
+          <Text style={styles.subtitle}>
+            {(completedModeDetail?.label ?? activeModeDetail?.label ?? "Normal")} mode · {ROUNDS} rounds · {TRIES_PER_ROUND} shots each
+          </Text>
+          {standings.length ? (
+            <>
+              <View style={styles.resultsHighlight}>
+                <Text style={styles.resultsHighlightLabel}>Champion</Text>
+                <Text style={styles.resultsHighlightName}>{standings[0].player.name}</Text>
+                <Text style={styles.resultsHighlightScore}>{`${standings[0].total} pts`}</Text>
+              </View>
+              {standings.map((entry, index) => (
+                <View key={entry.player.id} style={styles.resultsPlayerCard}>
+                  <View style={styles.resultsPlayerHeader}>
+                    <Text style={styles.resultsPlayerName}>{`${index + 1}. ${entry.player.name}`}</Text>
+                    <Text style={styles.resultsPlayerTotal}>{entry.total}</Text>
+                  </View>
+                  <View style={styles.resultsRoundsRow}>
+                    {entry.averages.map((avg, roundIndex) => (
+                      <View key={`${entry.player.id}-round-${roundIndex}`} style={styles.resultsRoundChip}>
+                        <Text style={styles.resultsRoundLabel}>{`R${roundIndex + 1}`}</Text>
+                        <Text style={styles.resultsRoundValue}>{avg !== null ? avg : "--"}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View style={styles.resultsStatsRow}>
+                    <View style={styles.resultsStatBlock}>
+                      <Text style={styles.resultsStatLabel}>Best score</Text>
+                      <Text style={styles.resultsStatValue}>{entry.highScore ?? "--"}</Text>
+                    </View>
+                    <View style={styles.resultsStatBlock}>
+                      <Text style={styles.resultsStatLabel}>Fastest</Text>
+                      <Text style={styles.resultsStatValue}>
+                        {entry.fastestReaction !== null ? `${entry.fastestReaction} ms` : "--"}
+                      </Text>
+                    </View>
+                    <View style={[styles.resultsStatBlock, styles.resultsStatBlockLast]}>
+                      <Text style={styles.resultsStatLabel}>Tightest miss</Text>
+                      <Text style={styles.resultsStatValue}>
+                        {entry.tightestMiss !== null ? `${Math.round(entry.tightestMiss)} px` : "--"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </>
+          ) : (
+            <Text style={styles.emptyMessage}>Complete a session to see the standings.</Text>
+          )}
+          <View style={styles.resultsActions}>
+            <MenuButton
+              title={selectedPlayers.length >= 2 ? "Run it back" : "Select players to rematch"}
+              onPress={() => {
+                void handleStartSession();
+              }}
+              disabled={selectedPlayers.length < 2}
+            />
+            <MenuButton
+              title="Back to setup"
+              onPress={() => setShowResults(false)}
+              style={styles.resultsBackButton}
+            />
+          </View>
+        </ScrollView>
+      ) : sessionActive ? (
         <>
           <ScrollView style={styles.sessionScroll} contentContainerStyle={styles.sessionContent}>
             <View style={styles.header}>
               <Text style={styles.title}>Local multiplayer</Text>
-              <PlayerSwitcher style={styles.headerSwitcher} />
               <Text style={styles.subtitle}>{turnLabel}</Text>
+              <Text style={styles.modeLabel}>Mode · {activeModeDetail?.label ?? sessionMode}</Text>
               {currentPlayer && (
                 <Text style={styles.currentPlayer}>{`Current shooter: ${currentPlayer.name}`}</Text>
               )}
@@ -218,7 +307,10 @@ export default function LocalMultiplayerScreen() {
                       {entry.averages.map((avg, index) => (
                         <Text
                           key={`${entry.player.id}-round-${index}`}
-                          style={[styles.standingRoundValue, avg !== null ? styles.standingRoundValueFilled : styles.standingRoundValueEmpty]}
+                          style={[
+                            styles.standingRoundValue,
+                            avg !== null ? styles.standingRoundValueFilled : styles.standingRoundValueEmpty,
+                          ]}
                         >
                           {avg !== null ? avg : "--"}
                         </Text>
@@ -234,7 +326,6 @@ export default function LocalMultiplayerScreen() {
             <GameScreen
               mode={sessionMode}
               persistScore={false}
-              showPlayerSwitcher={false}
               onAttemptComplete={handleAttemptComplete}
               renderResultActions={({ reset }) => (
                 <MenuButton
@@ -249,12 +340,14 @@ export default function LocalMultiplayerScreen() {
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
           <Text style={styles.title}>Local multiplayer</Text>
-          <PlayerSwitcher style={styles.selectionSwitcher} />
           <Text style={styles.subtitle}>
             Select at least two players and a mode. Each competitor shoots {TRIES_PER_ROUND} times per round for {ROUNDS}
             rounds. Scores are averaged per round and summed to crown the champion.
           </Text>
-          <View style={styles.section}> 
+          <Text style={styles.helperText}>
+            Profiles rotate automatically during play. Change the active profile from a solo results screen.
+          </Text>
+          <View style={styles.section}>
             <Text style={styles.sectionTitle}>Players</Text>
             {players.length ? (
               players.map((player) => {
@@ -306,7 +399,9 @@ export default function LocalMultiplayerScreen() {
           )}
           <MenuButton
             title={selectedPlayers.length >= 2 ? "Start match" : "Pick at least two players"}
-            onPress={handleStartSession}
+            onPress={() => {
+              void handleStartSession();
+            }}
             disabled={selectedPlayers.length < 2}
             style={styles.startButton}
           />
@@ -320,13 +415,15 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   scroll: { flex: 1 },
   sessionScroll: { flex: 1 },
+  resultsScroll: { flex: 1 },
   content: { padding: 20, paddingBottom: 32 },
   sessionContent: { padding: 20, paddingBottom: 24 },
+  resultsContent: { padding: 20, paddingBottom: 32 },
   title: { color: palette.textPrimary, fontSize: 26, fontWeight: "800", marginBottom: 12 },
-  subtitle: { color: palette.textSecondary, fontSize: 13, marginBottom: 16, lineHeight: 18 },
-  selectionSwitcher: { alignSelf: "flex-start", marginBottom: 12 },
+  subtitle: { color: palette.textSecondary, fontSize: 13, marginBottom: 12, lineHeight: 18 },
+  helperText: { color: palette.textSecondary, fontSize: 12, marginBottom: 20 },
   header: { marginBottom: 16 },
-  headerSwitcher: { marginTop: 12, alignSelf: "flex-start" },
+  modeLabel: { color: palette.textSecondary, fontSize: 12, textTransform: "uppercase", letterSpacing: 1 },
   currentPlayer: { color: palette.textPrimary, fontSize: 14, marginTop: 8 },
   section: { marginBottom: 24 },
   sectionTitle: { color: palette.textPrimary, fontSize: 18, fontWeight: "700", marginBottom: 12 },
@@ -410,5 +507,47 @@ const styles = StyleSheet.create({
   },
   resultsTitle: { color: palette.textPrimary, fontSize: 16, fontWeight: "700" },
   resultsText: { color: palette.textSecondary, marginTop: 4 },
+  resultsHighlight: {
+    backgroundColor: palette.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: 16,
+    marginBottom: 16,
+  },
+  resultsHighlightLabel: { color: palette.textSecondary, fontSize: 12, letterSpacing: 1, textTransform: "uppercase" },
+  resultsHighlightName: { color: palette.textPrimary, fontSize: 22, fontWeight: "800", marginTop: 8 },
+  resultsHighlightScore: { color: palette.textSecondary, fontSize: 12, marginTop: 4 },
+  resultsPlayerCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: 16,
+    marginBottom: 16,
+  },
+  resultsPlayerHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  resultsPlayerName: { color: palette.textPrimary, fontSize: 16, fontWeight: "700" },
+  resultsPlayerTotal: { color: palette.textPrimary, fontSize: 18, fontWeight: "800" },
+  resultsRoundsRow: { flexDirection: "row", flexWrap: "wrap", marginBottom: 12 },
+  resultsRoundChip: {
+    backgroundColor: palette.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.border,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  resultsRoundLabel: { color: palette.textSecondary, fontSize: 11, letterSpacing: 0.5 },
+  resultsRoundValue: { color: palette.textPrimary, fontSize: 14, fontWeight: "700", marginTop: 2 },
+  resultsStatsRow: { flexDirection: "row", justifyContent: "space-between" },
+  resultsStatBlock: { flex: 1, marginRight: 12 },
+  resultsStatBlockLast: { marginRight: 0 },
+  resultsStatLabel: { color: palette.textSecondary, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 },
+  resultsStatValue: { color: palette.textPrimary, fontSize: 14, fontWeight: "700", marginTop: 4 },
+  resultsActions: { marginTop: 12 },
+  resultsBackButton: { marginTop: 12 },
   gameWrapper: { flex: 1, minHeight: 480 },
 });

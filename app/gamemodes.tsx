@@ -1,7 +1,7 @@
 import React from "react";
-import { View, StyleSheet, Text } from "react-native";
+import { View, StyleSheet, Text, TouchableOpacity } from "react-native";
 import { router } from "expo-router";
-import { MenuButton, PlayerSwitcher } from "../src/ui";
+import { MenuButton } from "../src/ui";
 import { palette } from "../src/theme";
 
 const modes = [
@@ -39,10 +39,10 @@ export default function GamemodeScreen() {
   return (
     <View style={styles.safe}>
       <View style={styles.container}>
-        <View style={styles.titleRow}>
-          <Text style={styles.title}>Choose your challenge</Text>
-          <PlayerSwitcher style={styles.switcher} />
-        </View>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()} activeOpacity={0.85}>
+          <Text style={styles.backText}>Back to menu</Text>
+        </TouchableOpacity>
+        <Text style={styles.title}>Choose your challenge</Text>
         {modes.map((mode) => (
           <View key={mode.title} style={styles.option}>
             <MenuButton title={mode.title} onPress={() => router.push(mode.path)} style={styles.optionButton} />
@@ -64,13 +64,14 @@ export default function GamemodeScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   container: { flex: 1, justifyContent: "center", padding: 24 },
-  titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  backButton: { alignSelf: "flex-start", paddingVertical: 6, paddingHorizontal: 2, marginBottom: 12 },
+  backText: { color: palette.textSecondary, fontSize: 13 },
   title: {
     color: palette.textPrimary,
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 26,
+    fontWeight: "800",
+    marginBottom: 12,
   },
-  switcher: { marginLeft: 16 },
   option: {
     backgroundColor: palette.surface,
     borderRadius: 16,
@@ -78,11 +79,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: palette.border,
-    shadowColor: "#04110A",
-    shadowOpacity: 0.35,
-    shadowOffset: { width: 0, height: 8 },
-    shadowRadius: 16,
-    elevation: 6,
   },
   optionButton: {
     marginVertical: 0,
