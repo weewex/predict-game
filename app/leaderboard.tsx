@@ -4,7 +4,6 @@ import { useFocusEffect } from "@react-navigation/native";
 import { getActivePlayer, getScores, subscribeActivePlayer } from "../src/storage";
 import type { GameMode, PlayerProfile, ScorePayload } from "../src/types";
 import { palette } from "../src/theme";
-import { PlayerSwitcher } from "../src/ui";
 
 const modeLabels: Record<GameMode, string> = {
   SIMPLE: "Simple",
@@ -320,7 +319,16 @@ export default function LeaderboardScreen() {
     () => (
       <View>
         <View style={styles.topRow}>
-          <PlayerSwitcher style={styles.switcher} onPlayerChange={(player) => setActivePlayer(player)} />
+          <View style={styles.playerSummary}>
+            <Text style={styles.playerSummaryTitle}>
+              {activePlayer ? `${activePlayer.name}'s timeline` : "No active player selected"}
+            </Text>
+            <Text style={styles.playerSummaryHint}>
+              {activePlayer
+                ? "Switch profiles from any solo results screen."
+                : "Finish a solo run to choose where scores are saved."}
+            </Text>
+          </View>
           <TouchableOpacity
             style={[styles.chartToggle, showCharts && styles.chartToggleActive]}
             onPress={() => setShowCharts((prev) => !prev)}
@@ -467,10 +475,12 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 16,
   },
-  switcher: { marginRight: 12 },
+  playerSummary: { flex: 1, paddingRight: 12 },
+  playerSummaryTitle: { color: palette.textPrimary, fontSize: 18, fontWeight: "700" },
+  playerSummaryHint: { color: palette.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 16 },
   chartToggle: {
     paddingVertical: 8,
     paddingHorizontal: 14,

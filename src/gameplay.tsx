@@ -527,7 +527,6 @@ export interface GameScreenProps {
   persistScore?: boolean;
   onAttemptComplete?: (result: GameAttemptResult) => void;
   renderResultActions?: ResultActionRenderer;
-  showPlayerSwitcher?: boolean;
 }
 
 export function GameScreen({
@@ -536,7 +535,6 @@ export function GameScreen({
   persistScore = true,
   onAttemptComplete,
   renderResultActions,
-  showPlayerSwitcher = true,
 }: GameScreenProps) {
   const isExtreme = mode === "EXTREME";
   const [phase, setPhase] = useState<Phase>("observe");
@@ -969,15 +967,8 @@ export function GameScreen({
   return (
     <View style={styles.safe}>
       <View style={styles.header}>
-        <View style={styles.headerRow}>
-          <View style={styles.titleGroup}>
-            <Text style={styles.modeTitle}>{detail.label} Mode</Text>
-            <Text style={styles.modeSubtitle}>{detail.description}</Text>
-          </View>
-          {showPlayerSwitcher && (
-            <PlayerSwitcher style={styles.switcher} onPlayerChange={(player) => setActivePlayerName(player?.name ?? null)} />
-          )}
-        </View>
+        <Text style={styles.modeTitle}>{detail.label} Mode</Text>
+        <Text style={styles.modeSubtitle}>{detail.description}</Text>
         <Text style={styles.playerBadge}>
           {activePlayerName ? `Active player · ${activePlayerName}` : "No active player selected"}
         </Text>
@@ -1050,11 +1041,20 @@ export function GameScreen({
               <Text style={styles.overlaySubtitle}>{phase === "guess" ? guessSubtitle : phaseCopy[phase].subtitle}</Text>
             </View>
           )}
-          {phase === "result" && result && (
-            <View style={styles.resultOverlay}>
-              <View style={styles.resultsCard}>
-                <Text style={styles.resultsTitle}>How close were you?</Text>
-                <View style={styles.resultsList}>
+        {phase === "result" && result && (
+          <View style={styles.resultOverlay}>
+            <View style={styles.resultsCard}>
+              {persistScore && (
+                <View style={styles.resultSwitcherGroup}>
+                  <Text style={styles.resultSwitcherLabel}>Score destination</Text>
+                  <PlayerSwitcher
+                    style={styles.resultSwitcher}
+                    onPlayerChange={(player) => setActivePlayerName(player?.name ?? null)}
+                  />
+                </View>
+              )}
+              <Text style={styles.resultsTitle}>How close were you?</Text>
+              <View style={styles.resultsList}>
                   {resultItems.map((item, index) => (
                     <Animated.View
                       key={item.key}
@@ -1142,11 +1142,8 @@ export function GameScreen({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   header: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 10 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  titleGroup: { flexShrink: 1, paddingRight: 12 },
   modeTitle: { color: palette.textPrimary, fontSize: 24, fontWeight: "800" },
   modeSubtitle: { color: palette.textSecondary, fontSize: 13, marginTop: 4 },
-  switcher: { marginTop: -6 },
   playerBadge: {
     color: palette.textSecondary,
     fontSize: 12,
@@ -1251,6 +1248,15 @@ const styles = StyleSheet.create({
   resultsList: {
     marginTop: 12,
   },
+  resultSwitcherGroup: { marginBottom: 16 },
+  resultSwitcherLabel: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  resultSwitcher: { alignSelf: "flex-start" },
   resultItem: {
     marginBottom: 12,
     alignItems: "center",

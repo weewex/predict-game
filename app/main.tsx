@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { View, StyleSheet, BackHandler, Text } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
-import { MenuButton, PlayerSwitcher } from "../src/ui";
+import { MenuButton } from "../src/ui";
 import { palette } from "../src/theme";
 import { getActivePlayer, subscribeActivePlayer } from "../src/storage";
 import type { PlayerProfile } from "../src/types";
@@ -35,11 +35,10 @@ export default function MainMenuScreen() {
   return (
     <View style={styles.safe}>
       <View style={styles.container}>
-        <View style={styles.titleRow}>
+        <View style={styles.header}>
           <Text style={styles.title}>Predict Aim</Text>
-          <PlayerSwitcher style={styles.switcher} onPlayerChange={(player) => setActivePlayer(player)} />
+          <Text style={styles.subtitle}>Sharpen your prediction timing across dynamic targets.</Text>
         </View>
-        <Text style={styles.subtitle}>Sharpen your prediction timing across dynamic targets.</Text>
         <View style={styles.playerCard}>
           <Text style={styles.playerCardLabel}>Active player</Text>
           <Text style={styles.playerCardName}>{activePlayer?.name ?? "None selected"}</Text>
@@ -64,10 +63,9 @@ export default function MainMenuScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   container: { flex: 1, justifyContent: "center", padding: 24 },
-  titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  title: { color: palette.textPrimary, fontSize: 30, fontWeight: "800", flexShrink: 1, paddingRight: 12 },
-  switcher: { marginLeft: 12 },
-  subtitle: { color: palette.textSecondary, fontSize: 14, marginTop: 8, marginBottom: 24 },
+  header: { marginBottom: 24 },
+  title: { color: palette.textPrimary, fontSize: 30, fontWeight: "800" },
+  subtitle: { color: palette.textSecondary, fontSize: 14, marginTop: 8 },
   playerCard: {
     backgroundColor: palette.surface,
     borderRadius: 16,
